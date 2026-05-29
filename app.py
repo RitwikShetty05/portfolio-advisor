@@ -1100,38 +1100,7 @@ def page_stock_analyzer(pipe: dict) -> None:
             f"Vol: {float(live.get('volume') or 0):,.0f}"
         )
 
-    # ---- Streamlit-side range picker ----
-    # Why this exists: Plotly's built-in rangeselector misbehaves with
-    # shared_xaxes subplots (clicks on the hidden top axis don't propagate to
-    # the visible bottom axis, so chips appear to jump to MAX). A Streamlit
-    # control bypasses Plotly entirely — we filter `df` to the chosen window
-    # BEFORE plotting, which guarantees all four rows zoom together.
-    _RANGES_DAYS = {
-        "5D": 5, "1M": 22, "3M": 66, "6M": 132,
-        "YTD": None, "1Y": 252, "3Y": 252 * 3, "MAX": None,
-    }
-    range_choice = st.radio(
-        "Range",
-        options=list(_RANGES_DAYS.keys()),
-        index=5,                                  # default to 1Y
-        horizontal=True,
-        key=f"stock_range_{ticker}",
-        label_visibility="collapsed",
-    )
-    if range_choice == "MAX" or df.empty:
-        df_view = df
-    elif range_choice == "YTD":
-        ytd_start = pd.Timestamp(df.index[-1].year, 1, 1)
-        df_view = df.loc[df.index >= ytd_start]
-        if df_view.empty:
-            df_view = df
-    else:
-        n = _RANGES_DAYS[range_choice]
-        df_view = df.iloc[-n:] if len(df) > n else df
-
     # ---- Combined 4-row chart: price/volume on top, RSI, MACD ----
-    # Reassign so all downstream trace builders pull from the filtered window.
-    df = df_view
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.025,
         row_heights=[0.5, 0.15, 0.175, 0.175],
@@ -1220,11 +1189,62 @@ def page_stock_analyzer(pipe: dict) -> None:
                              marker_color=colors, marker_line_width=0,
                              opacity=0.55, showlegend=False), row=4, col=1)
 
+    # ---- Range-chip menu (Plotly updatemenus) ----
+    # Why updatemenus, not rangeselector: Plotly's built-in rangeselector
+    # relies on shared_xaxes's `matches='x'` propagation, which is unreliable
+    # for our 4-row subplot — clicking 1M/3M visually did nothing (the
+    # invisible row-1 x-axis got the new range but the visible row-4 axis
+    # didn't follow). updatemenus.method="relayout" lets us set ALL four
+    # x-axes simultaneously in a single click → guaranteed sync. The buttons
+    # are styled to LOOK like rangeselector chips at the top of the chart.
+    if not df.empty:
+        end_date = df.index[-1]
+        start_date = df.index[0]
+
+        def _chip(label: str, lo: pd.Timestamp) -> dict:
+            """Build one chip button that sets every axis's range to [lo, end_date]."""
+            rng = [lo, end_date]
+            return dict(
+                label=label,
+                method="relayout",
+                args=[{
+                    "xaxis.range":  rng,
+                    "xaxis2.range": rng,
+                    "xaxis3.range": rng,
+                    "xaxis4.range": rng,
+                }],
+            )
+
+        chip_buttons = [
+            _chip("5D",  end_date - pd.DateOffset(days=5)),
+            _chip("1M",  end_date - pd.DateOffset(months=1)),
+            _chip("3M",  end_date - pd.DateOffset(months=3)),
+            _chip("6M",  end_date - pd.DateOffset(months=6)),
+            _chip("YTD", pd.Timestamp(end_date.year, 1, 1)),
+            _chip("1Y",  end_date - pd.DateOffset(years=1)),
+            _chip("3Y",  end_date - pd.DateOffset(years=3)),
+            _chip("MAX", start_date),
+        ]
+
+        fig.update_layout(
+            updatemenus=[dict(
+                type="buttons",
+                direction="right",
+                buttons=chip_buttons,
+                x=0.0, y=1.085, xanchor="left", yanchor="bottom",
+                showactive=False,
+                bgcolor="rgba(15, 23, 42, 0.04)",
+                bordercolor=THEME["grid"], borderwidth=1,
+                font=dict(size=11, color="#334155"),
+                pad=dict(l=6, r=6, t=3, b=3),
+            )],
+        )
+
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
-        height=900, margin=dict(l=40, r=20, t=40, b=20),
+        height=940, margin=dict(l=40, r=20, t=70, b=20),  # +30 top for chips
         xaxis_rangeslider_visible=False, hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, x=0.32),
         font=dict(family="Inter, system-ui, sans-serif", size=12),
     )
     for r in (1, 2, 3, 4):
