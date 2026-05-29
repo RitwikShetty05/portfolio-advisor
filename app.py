@@ -196,8 +196,9 @@ def add_range_selector(fig: go.Figure, row: int | None = None,
     **simple** ``go.Figure()`` charts (single axis), passing row/col raises
     an exception. So we pass row/col only when explicitly provided.
     """
-    # Reverted to a minimal config compatible with the Plotly version on
-    # Streamlit Cloud (xref / bordercolor on rangeselector are newer-only).
+    # Restored bordercolor/borderwidth (valid rangeselector properties that
+    # give the chips their teal outline). The properties that caused the
+    # Streamlit Cloud ValueError were xref/yref, not these.
     kwargs = dict(
         rangeselector=dict(
             buttons=[
@@ -212,6 +213,8 @@ def add_range_selector(fig: go.Figure, row: int | None = None,
             ],
             bgcolor="rgba(15, 23, 42, 0.04)",
             activecolor=THEME["bull"],
+            bordercolor=THEME["grid"],
+            borderwidth=1,
             font=dict(size=11, color="#334155"),
             x=0.0, y=1.12, xanchor="left", yanchor="bottom",
         ),
@@ -1189,57 +1192,6 @@ def page_stock_analyzer(pipe: dict) -> None:
                              marker_color=colors, marker_line_width=0,
                              opacity=0.55, showlegend=False), row=4, col=1)
 
-    # ---- Range-chip menu (Plotly updatemenus) ----
-    # Why updatemenus, not rangeselector: Plotly's built-in rangeselector
-    # relies on shared_xaxes's `matches='x'` propagation, which is unreliable
-    # for our 4-row subplot — clicking 1M/3M visually did nothing (the
-    # invisible row-1 x-axis got the new range but the visible row-4 axis
-    # didn't follow). updatemenus.method="relayout" lets us set ALL four
-    # x-axes simultaneously in a single click → guaranteed sync. The buttons
-    # are styled to LOOK like rangeselector chips at the top of the chart.
-    if not df.empty:
-        end_date = df.index[-1]
-        start_date = df.index[0]
-
-        def _chip(label: str, lo: pd.Timestamp) -> dict:
-            """Build one chip button that sets every axis's range to [lo, end_date]."""
-            rng = [lo, end_date]
-            return dict(
-                label=label,
-                method="relayout",
-                args=[{
-                    "xaxis.range":  rng,
-                    "xaxis2.range": rng,
-                    "xaxis3.range": rng,
-                    "xaxis4.range": rng,
-                }],
-            )
-
-        chip_buttons = [
-            _chip("5D",  end_date - pd.DateOffset(days=5)),
-            _chip("1M",  end_date - pd.DateOffset(months=1)),
-            _chip("3M",  end_date - pd.DateOffset(months=3)),
-            _chip("6M",  end_date - pd.DateOffset(months=6)),
-            _chip("YTD", pd.Timestamp(end_date.year, 1, 1)),
-            _chip("1Y",  end_date - pd.DateOffset(years=1)),
-            _chip("3Y",  end_date - pd.DateOffset(years=3)),
-            _chip("MAX", start_date),
-        ]
-
-        fig.update_layout(
-            updatemenus=[dict(
-                type="buttons",
-                direction="right",
-                buttons=chip_buttons,
-                x=0.0, y=1.085, xanchor="left", yanchor="bottom",
-                showactive=False,
-                bgcolor="rgba(15, 23, 42, 0.04)",
-                bordercolor=THEME["grid"], borderwidth=1,
-                font=dict(size=11, color="#334155"),
-                pad=dict(l=6, r=6, t=3, b=3),
-            )],
-        )
-
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
         height=940, margin=dict(l=40, r=20, t=70, b=20),  # +30 top for chips
@@ -1250,6 +1202,17 @@ def page_stock_analyzer(pipe: dict) -> None:
     for r in (1, 2, 3, 4):
         fig.update_xaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
         fig.update_yaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
+    # Original rangeselector chip menu at the top of the chart.
+    add_range_selector(fig, row=1, col=1)
+    # CRITICAL: explicitly link rows 2-4 to row 1's x-axis. `shared_xaxes=True`
+    # in make_subplots is supposed to set `matches='x'` on these rows, but on
+    # Streamlit Cloud's Plotly version the rangeselector's relayout doesn't
+    # propagate via that auto-matches consistently — clicks on 1M/3M would
+    # change xaxis.range but the visible (xaxis4) axis would stay at MAX.
+    # Re-asserting matches='x' AFTER all other update_xaxes calls forces
+    # the linkage to stick, so a single button click zooms all four rows.
+    for r in (2, 3, 4):
+        fig.update_xaxes(matches="x", row=r, col=1)
     st.plotly_chart(fig, use_container_width=True)
 
     # Trade plan card on active signals.
