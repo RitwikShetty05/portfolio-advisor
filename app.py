@@ -593,19 +593,19 @@ def render_top_status_bar(pipe: dict | None = None) -> None:
         delta_html = ""
         if delta:
             color = delta_color or "#cbd5e1"
-            delta_html = (f"<span style='color:{color};margin-left:6px;"
-                          f"font-weight:600;font-size:0.82rem;'>{delta}</span>")
-        # Tighter padding (was 2px 14px) so all 5 cells fit on one line
-        # on standard widescreen viewports.
+            delta_html = (f"<span style='color:{color};margin-left:5px;"
+                          f"font-weight:600;font-size:0.76rem;'>{delta}</span>")
+        # Tight padding — all cells + right cluster fit on a single line
+        # on standard widescreen viewports (≥1280px).
         return (
             f"<span style='display:inline-flex;align-items:baseline;"
-            f"padding:2px 11px;border-right:1px solid #334155;"
+            f"padding:2px 9px;border-right:1px solid #334155;"
             f"white-space:nowrap;'>"
-            f"<span style='color:#94a3b8;font-size:0.70rem;"
-            f"text-transform:uppercase;letter-spacing:0.06em;"
+            f"<span style='color:#94a3b8;font-size:0.66rem;"
+            f"text-transform:uppercase;letter-spacing:0.05em;"
             f"font-weight:600;'>{label}</span>"
-            f"<span style='font-weight:700;margin-left:7px;color:white;"
-            f"font-size:0.90rem;'>{value}</span>"
+            f"<span style='font-weight:700;margin-left:6px;color:white;"
+            f"font-size:0.86rem;'>{value}</span>"
             f"{delta_html}"
             f"</span>"
         )
@@ -640,40 +640,50 @@ def render_top_status_bar(pipe: dict | None = None) -> None:
     left_html = "".join(cells)
 
     # Right side: time + market-status pill.
+    # Status text deliberately shortened *only in the bar* so the whole
+    # strip fits on one line. The verbose labels still live in
+    # market_status_text() for use elsewhere.
     open_now = is_market_open()
     status_label, status_color = market_status_text()
+    if status_label.startswith("AFTER HOURS"):
+        status_label = "CLOSED · AH"
+    elif status_label.startswith("WEEKEND"):
+        status_label = "CLOSED · WKND"
+    elif "—" in status_label and status_label.startswith("MARKETS CLOSED"):
+        # e.g. "MARKETS CLOSED — Republic Day" → "HOLIDAY"
+        status_label = "HOLIDAY"
     time_str = now_ist().strftime("%H:%M IST")
     right_html = (
-        f"<span style='color:#cbd5e1;font-size:0.85rem;margin-right:12px;"
+        f"<span style='color:#cbd5e1;font-size:0.78rem;margin-right:9px;"
         f"font-weight:600;'>{time_str}</span>"
         f"<span style='background:{status_color};color:white;"
-        f"padding:4px 12px;border-radius:12px;font-size:0.72rem;"
-        f"font-weight:700;letter-spacing:0.06em;'>"
+        f"padding:3px 9px;border-radius:10px;font-size:0.66rem;"
+        f"font-weight:700;letter-spacing:0.05em;'>"
         f"● {status_label}</span>"
     )
 
     # Wrap behavior:
-    #   * Left cluster (indices) shrinks/wraps as needed via flex-wrap.
-    #   * Right cluster (time + status pill) uses margin-left: auto so it
-    #     pushes to the END of its flex line even when wrapped — preventing
-    #     the empty-space-on-the-right look when the bar splits onto two rows.
+    #   * Whole bar is forced onto ONE line via flex-wrap: nowrap.
+    #   * If the viewport is narrower than the content (rare on widescreens),
+    #     overflow-x: auto gives a clean horizontal scroll instead of the
+    #     ugly two-row split we had before.
     st.markdown(
         f"""
         <div style='background:linear-gradient(90deg,#0f172a 0%,#1e293b 100%);
-                    color:white;padding:12px 16px;border-radius:8px;
-                    margin-top:4px;margin-bottom:1.4rem;
+                    color:white;padding:10px 14px;border-radius:8px;
+                    margin-top:4px;margin-bottom:1.2rem;
                     border:1px solid #334155;
                     box-shadow:0 2px 6px rgba(15,23,42,0.18);
                     font-variant-numeric: tabular-nums;
-                    display:flex;align-items:center;flex-wrap:wrap;
-                    row-gap:8px;column-gap:0;
-                    min-height:46px;'>
-            <div style='display:flex;flex-wrap:wrap;align-items:center;
-                        line-height:1.4;flex:1 1 auto;'>
+                    display:flex;align-items:center;flex-wrap:nowrap;
+                    overflow-x:auto;
+                    min-height:40px;'>
+            <div style='display:flex;flex-wrap:nowrap;align-items:center;
+                        line-height:1.3;flex:1 1 auto;'>
                 {left_html}
             </div>
             <div style='display:flex;align-items:center;white-space:nowrap;
-                        margin-left:auto;padding-left:14px;'>
+                        margin-left:auto;padding-left:10px;'>
                 {right_html}
             </div>
         </div>
