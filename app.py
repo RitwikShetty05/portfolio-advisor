@@ -594,18 +594,18 @@ def render_top_status_bar(pipe: dict | None = None) -> None:
         if delta:
             color = delta_color or "#cbd5e1"
             delta_html = (f"<span style='color:{color};margin-left:5px;"
-                          f"font-weight:600;font-size:0.76rem;'>{delta}</span>")
-        # Tight padding — all cells + right cluster fit on a single line
-        # on standard widescreen viewports (≥1280px).
+                          f"font-weight:600;font-size:0.72rem;'>{delta}</span>")
+        # Tight padding + small fonts so all 5 cells + full-length status
+        # message ("AFTER HOURS — MARKETS CLOSED") fit on a single line.
         return (
             f"<span style='display:inline-flex;align-items:baseline;"
-            f"padding:2px 9px;border-right:1px solid #334155;"
+            f"padding:2px 8px;border-right:1px solid #334155;"
             f"white-space:nowrap;'>"
-            f"<span style='color:#94a3b8;font-size:0.66rem;"
+            f"<span style='color:#94a3b8;font-size:0.62rem;"
             f"text-transform:uppercase;letter-spacing:0.05em;"
             f"font-weight:600;'>{label}</span>"
-            f"<span style='font-weight:700;margin-left:6px;color:white;"
-            f"font-size:0.86rem;'>{value}</span>"
+            f"<span style='font-weight:700;margin-left:5px;color:white;"
+            f"font-size:0.82rem;'>{value}</span>"
             f"{delta_html}"
             f"</span>"
         )
@@ -639,25 +639,16 @@ def render_top_status_bar(pipe: dict | None = None) -> None:
 
     left_html = "".join(cells)
 
-    # Right side: time + market-status pill.
-    # Status text deliberately shortened *only in the bar* so the whole
-    # strip fits on one line. The verbose labels still live in
-    # market_status_text() for use elsewhere.
+    # Right side: time (12-hour, with AM/PM) + full market-status pill.
     open_now = is_market_open()
     status_label, status_color = market_status_text()
-    if status_label.startswith("AFTER HOURS"):
-        status_label = "CLOSED · AH"
-    elif status_label.startswith("WEEKEND"):
-        status_label = "CLOSED · WKND"
-    elif "—" in status_label and status_label.startswith("MARKETS CLOSED"):
-        # e.g. "MARKETS CLOSED — Republic Day" → "HOLIDAY"
-        status_label = "HOLIDAY"
-    time_str = now_ist().strftime("%H:%M IST")
+    # 12-hour clock with leading zero stripped — e.g. "4:30 PM IST"
+    time_str = now_ist().strftime("%I:%M %p IST").lstrip("0")
     right_html = (
-        f"<span style='color:#cbd5e1;font-size:0.78rem;margin-right:9px;"
+        f"<span style='color:#cbd5e1;font-size:0.74rem;margin-right:9px;"
         f"font-weight:600;'>{time_str}</span>"
         f"<span style='background:{status_color};color:white;"
-        f"padding:3px 9px;border-radius:10px;font-size:0.66rem;"
+        f"padding:3px 9px;border-radius:10px;font-size:0.62rem;"
         f"font-weight:700;letter-spacing:0.05em;'>"
         f"● {status_label}</span>"
     )
