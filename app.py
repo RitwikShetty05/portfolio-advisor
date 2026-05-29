@@ -196,6 +196,8 @@ def add_range_selector(fig: go.Figure, row: int | None = None,
     **simple** ``go.Figure()`` charts (single axis), passing row/col raises
     an exception. So we pass row/col only when explicitly provided.
     """
+    # Reverted to a minimal config compatible with the Plotly version on
+    # Streamlit Cloud (xref / bordercolor on rangeselector are newer-only).
     kwargs = dict(
         rangeselector=dict(
             buttons=[
@@ -210,14 +212,8 @@ def add_range_selector(fig: go.Figure, row: int | None = None,
             ],
             bgcolor="rgba(15, 23, 42, 0.04)",
             activecolor=THEME["bull"],
-            bordercolor=THEME["grid"],
-            borderwidth=1,
             font=dict(size=11, color="#334155"),
-            # Pin position to the figure container, not the axis domain.
-            # That way the chips appear at the top of the WHOLE chart even
-            # when the rangeselector is attached to the bottom subplot.
-            x=0.0, y=1.0, xanchor="left", yanchor="bottom",
-            xref="container", yref="container",
+            x=0.0, y=1.12, xanchor="left", yanchor="bottom",
         ),
         rangeslider=dict(visible=False),
     )
@@ -1104,7 +1100,38 @@ def page_stock_analyzer(pipe: dict) -> None:
             f"Vol: {float(live.get('volume') or 0):,.0f}"
         )
 
+    # ---- Streamlit-side range picker ----
+    # Why this exists: Plotly's built-in rangeselector misbehaves with
+    # shared_xaxes subplots (clicks on the hidden top axis don't propagate to
+    # the visible bottom axis, so chips appear to jump to MAX). A Streamlit
+    # control bypasses Plotly entirely — we filter `df` to the chosen window
+    # BEFORE plotting, which guarantees all four rows zoom together.
+    _RANGES_DAYS = {
+        "5D": 5, "1M": 22, "3M": 66, "6M": 132,
+        "YTD": None, "1Y": 252, "3Y": 252 * 3, "MAX": None,
+    }
+    range_choice = st.radio(
+        "Range",
+        options=list(_RANGES_DAYS.keys()),
+        index=5,                                  # default to 1Y
+        horizontal=True,
+        key=f"stock_range_{ticker}",
+        label_visibility="collapsed",
+    )
+    if range_choice == "MAX" or df.empty:
+        df_view = df
+    elif range_choice == "YTD":
+        ytd_start = pd.Timestamp(df.index[-1].year, 1, 1)
+        df_view = df.loc[df.index >= ytd_start]
+        if df_view.empty:
+            df_view = df
+    else:
+        n = _RANGES_DAYS[range_choice]
+        df_view = df.iloc[-n:] if len(df) > n else df
+
     # ---- Combined 4-row chart: price/volume on top, RSI, MACD ----
+    # Reassign so all downstream trace builders pull from the filtered window.
+    df = df_view
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.025,
         row_heights=[0.5, 0.15, 0.175, 0.175],
@@ -1195,23 +1222,14 @@ def page_stock_analyzer(pipe: dict) -> None:
 
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
-        height=940, margin=dict(l=40, r=20, t=70, b=20),  # +30 top for range chips
+        height=900, margin=dict(l=40, r=20, t=40, b=20),
         xaxis_rangeslider_visible=False, hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.03, x=0.32),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
         font=dict(family="Inter, system-ui, sans-serif", size=12),
     )
     for r in (1, 2, 3, 4):
         fig.update_xaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
         fig.update_yaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
-    # Range chips attached to the BOTTOM (visible) axis, not row 1.
-    # Plotly subtlety: with shared_xaxes=True the top axis is invisible and
-    # `matches='x'` is meant to propagate range changes from the rangeselector
-    # downward — but in practice, rangeselector clicks on a hidden axis often
-    # don't trigger the propagation cleanly, which makes 1M / 3M / 6M chips
-    # look like they jump to MAX. Attaching to row=4 (the visible bottom axis)
-    # makes the click update the correct axis; the buttons themselves still
-    # render at the top because their y-position uses container coordinates.
-    add_range_selector(fig, row=4, col=1)
     st.plotly_chart(fig, use_container_width=True)
 
     # Trade plan card on active signals.
