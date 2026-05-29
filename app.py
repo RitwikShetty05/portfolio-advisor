@@ -822,7 +822,14 @@ def page_dashboard(pipe: dict) -> None:
     # --- Re-run regime detector on the benchmark for a "market view" ---
     bench_enriched = FeatureEngineer().compute(bench)
     bench_labelled = RegimeDetector(method="hmm").fit_transform(bench_enriched)
-    latest = bench_labelled.dropna(subset=["Close", "Regime_Label"]).iloc[-1]
+    # Guard against benchmark data being empty / fully-NaN — dashboard
+    # otherwise crashes hard on the iloc[-1] read.
+    valid = bench_labelled.dropna(subset=["Close", "Regime_Label"])
+    if valid.empty:
+        st.warning("Benchmark data is unavailable right now — try clicking "
+                   "**🔄 Force refresh data** in the sidebar.")
+        return
+    latest = valid.iloc[-1]
     latest_label = str(latest["Regime_Label"])
 
     st.markdown(f"### Market regime: {regime_badge(latest_label)}",
@@ -1450,8 +1457,12 @@ def _compute_live_portfolio_value(
     for ticker, amount in holdings.items():
         q = quotes.get(ticker)
         df = signaled.get(ticker)
-        last_close = (float(df["Close"].dropna().iloc[-1])
-                      if df is not None and not df.empty else None)
+        # Guard against fully-NaN Close series (would IndexError on iloc[-1]).
+        last_close: float | None = None
+        if df is not None and not df.empty:
+            closes = df["Close"].dropna()
+            if not closes.empty:
+                last_close = float(closes.iloc[-1])
         if q is None or q.get("stale") or last_close is None or last_close <= 0:
             live_total += amount                    # no fresh data → no change
             continue
@@ -1982,14 +1993,16 @@ def _is_vs_oos_equity_chart(bt, wf_result, benchmark) -> go.Figure:
         line=dict(color=THEME["bull"], width=2.4),
         hovertemplate="%{x|%d-%b-%Y}<br>OOS: %{y:.3f}<extra></extra>",
     ))
-    # Benchmark on the OOS window for comparison.
-    bench_window = benchmark["Close"].reindex(oos_eq.index).ffill()
-    bench_norm = bench_window / bench_window.iloc[0]
-    fig.add_trace(go.Scatter(
-        x=bench_norm.index, y=bench_norm, name="NIFTY 50 (OOS window)",
-        line=dict(color=THEME["benchmark"], width=1.4, dash="dash"),
-        hovertemplate="%{x|%d-%b-%Y}<br>NIFTY: %{y:.3f}<extra></extra>",
-    ))
+    # Benchmark on the OOS window for comparison. Defensive bfill so a
+    # leading NaN doesn't make the whole normalised series NaN.
+    bench_window = benchmark["Close"].reindex(oos_eq.index).ffill().bfill()
+    if not bench_window.empty and pd.notna(bench_window.iloc[0]) and bench_window.iloc[0] != 0:
+        bench_norm = bench_window / bench_window.iloc[0]
+        fig.add_trace(go.Scatter(
+            x=bench_norm.index, y=bench_norm, name="NIFTY 50 (OOS window)",
+            line=dict(color=THEME["benchmark"], width=1.4, dash="dash"),
+            hovertemplate="%{x|%d-%b-%Y}<br>NIFTY: %{y:.3f}<extra></extra>",
+        ))
     # Shade the OOS span so the user can visually separate it from IS.
     fig.add_vrect(x0=oos_eq.index[0], x1=oos_eq.index[-1],
                   fillcolor=THEME["bull"], opacity=0.04, line_width=0,
@@ -2166,7 +2179,8 @@ def _render_factor_attribution_tab(bt: Backtester, pipe: dict) -> None:
 def equity_vs_benchmark_chart(bt: Backtester,
                               benchmark: pd.DataFrame) -> go.Figure:
     eq = bt.equity_curve / bt.equity_curve.iloc[0]
-    bench = benchmark["Close"].reindex(bt.equity_curve.index).ffill()
+    # Defensive bfill — leading NaN benchmark would break the normalised series.
+    bench = benchmark["Close"].reindex(bt.equity_curve.index).ffill().bfill()
     bench_norm = bench / bench.iloc[0]
 
     fig = go.Figure()
