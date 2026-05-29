@@ -241,7 +241,19 @@ class WalkForward:
     # ------------------------------------------------------------------
     def _build_windows(self, enriched: Dict[str, pd.DataFrame]
                        ) -> List[WalkForwardWindow]:
-        all_dates = sorted(set().union(*(df.index for df in enriched.values())))
+        # Normalise to tz-naive Timestamps to avoid TypeError when mixing
+        # tz-aware (fresh yfinance fetch) and tz-naive (CSV-cached) indices
+        # in the same set / sort. See data_loader._fetch_one for the
+        # upstream normalisation; this is the defensive backup.
+        def _strip_tz(d):
+            ts = pd.Timestamp(d)
+            return ts.tz_localize(None) if ts.tz is not None else ts
+
+        all_dates = sorted({
+            _strip_tz(d)
+            for df in enriched.values()
+            for d in df.index
+        })
         if not all_dates:
             return []
         idx = pd.DatetimeIndex(all_dates)

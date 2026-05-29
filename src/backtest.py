@@ -170,9 +170,16 @@ class Backtester:
             raise ValueError("No tickers to backtest.")
 
         # Build the master trading calendar from the union of all ticker indices.
-        master_index = sorted(
-            set().union(*(df.index for df in signaled.values()))
-        )
+        # Normalise to tz-naive to avoid TypeError when mixing tz-aware /
+        # tz-naive Timestamps in the same set (see data_loader._fetch_one).
+        def _strip_tz(d):
+            ts = pd.Timestamp(d)
+            return ts.tz_localize(None) if ts.tz is not None else ts
+        master_index = sorted({
+            _strip_tz(d)
+            for df in signaled.values()
+            for d in df.index
+        })
         master_index = pd.DatetimeIndex(master_index)
         logger.info("Backtesting %d tickers over %d trading days (%s → %s)",
                     len(signaled), len(master_index),
