@@ -213,7 +213,11 @@ def add_range_selector(fig: go.Figure, row: int | None = None,
             bordercolor=THEME["grid"],
             borderwidth=1,
             font=dict(size=11, color="#334155"),
-            x=0.0, y=1.12, xanchor="left", yanchor="bottom",
+            # Pin position to the figure container, not the axis domain.
+            # That way the chips appear at the top of the WHOLE chart even
+            # when the rangeselector is attached to the bottom subplot.
+            x=0.0, y=1.0, xanchor="left", yanchor="bottom",
+            xref="container", yref="container",
         ),
         rangeslider=dict(visible=False),
     )
@@ -1199,8 +1203,15 @@ def page_stock_analyzer(pipe: dict) -> None:
     for r in (1, 2, 3, 4):
         fig.update_xaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
         fig.update_yaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
-    # Range chips on row 1 — shared_xaxes propagates the selection downward.
-    add_range_selector(fig, row=1, col=1)
+    # Range chips attached to the BOTTOM (visible) axis, not row 1.
+    # Plotly subtlety: with shared_xaxes=True the top axis is invisible and
+    # `matches='x'` is meant to propagate range changes from the rangeselector
+    # downward — but in practice, rangeselector clicks on a hidden axis often
+    # don't trigger the propagation cleanly, which makes 1M / 3M / 6M chips
+    # look like they jump to MAX. Attaching to row=4 (the visible bottom axis)
+    # makes the click update the correct axis; the buttons themselves still
+    # render at the top because their y-position uses container coordinates.
+    add_range_selector(fig, row=4, col=1)
     st.plotly_chart(fig, use_container_width=True)
 
     # Trade plan card on active signals.
