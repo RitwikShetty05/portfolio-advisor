@@ -144,6 +144,20 @@ class DataLoader:
         age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
         return age < timedelta(days=self.cache_max_age_days)
 
+    @staticmethod
+    def _most_recent_business_day() -> pd.Timestamp:
+        """Most recent Mon–Fri date (approximate — ignores exchange holidays).
+
+        Used as a sanity check on whether the cached CSV covers today's
+        likely data. Holidays produce false positives (we'd refetch a Monday
+        that wasn't actually a trading day) but yfinance just returns the
+        same data, so it's harmless.
+        """
+        t = pd.Timestamp.now().normalize()
+        while t.weekday() >= 5:                       # Sat, Sun
+            t = t - pd.Timedelta(days=1)
+        return t
+
     def _read_cache(self, ticker: str) -> pd.DataFrame | None:
         path = self._cache_path(ticker)
         if not (self.use_cache and self._cache_is_fresh(path)):
@@ -156,6 +170,18 @@ class DataLoader:
             # don't TypeError on mixed Timestamps.
             if getattr(df.index, "tz", None) is not None:
                 df.index = df.index.tz_localize(None)
+            # "Today coverage" check — if the cache stops before the most
+            # recent business day, treat it as stale and refetch. This is
+            # what makes today's signal show up in the heat-map during /
+            # after market hours instead of being permanently one day behind.
+            if not df.empty:
+                target = self._most_recent_business_day()
+                if df.index.max() < target:
+                    logger.info(
+                        "[%s] cache covers up to %s, target %s — refetching",
+                        ticker, df.index.max().date(), target.date(),
+                    )
+                    return None
             logger.debug("[%s] cache hit (%s)", ticker, path.name)
             return df
         except Exception as e:  # malformed cache — just refetch
@@ -179,7 +205,18 @@ class DataLoader:
         if cached is not None and not cached.empty:
             return cached
 
-        logger.info("[%s] fetching from yfinance %s → %s", ticker, self.start, self.end)
+        # yfinance treats `end` as EXCLUSIVE for daily bars (the bar dated
+        # `end` is NOT included). To get today's bar in the heat-map and
+        # signal panel during/after market hours, bump end by one calendar
+        # day before calling yfinance.
+        try:
+            end_inclusive = (pd.Timestamp(self.end)
+                             + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        except Exception:
+            end_inclusive = self.end
+
+        logger.info("[%s] fetching from yfinance %s → %s (incl.)",
+                    ticker, self.start, end_inclusive)
         # auto_adjust=True → split & dividend adjusted Close, High, Low, Open.
         # progress=False keeps logs clean when looping over many tickers.
         #
@@ -194,7 +231,7 @@ class DataLoader:
             df = yf.download(
                 tickers=ticker,
                 start=self.start,
-                end=self.end,
+                end=end_inclusive,
                 auto_adjust=True,
                 progress=False,
                 threads=False,
@@ -207,7 +244,7 @@ class DataLoader:
             try:
                 df = yf.Ticker(ticker).history(
                     start=self.start,
-                    end=self.end,
+                    end=end_inclusive,
                     auto_adjust=True,
                 )
             except Exception as e:
