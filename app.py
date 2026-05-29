@@ -914,7 +914,17 @@ def build_signal_heatmap(signaled: dict[str, pd.DataFrame],
     """
     z_rows, conf_rows, label_rows, tickers, date_strs = [], [], [], [], []
     # Align to the union of recent dates so columns line up across tickers.
-    all_dates = sorted({d for df in signaled.values() for d in df.dropna(subset=["Signal"]).tail(lookback).index})
+    # Defensive: normalise to tz-naive so mixed tz indices (from cache vs
+    # fresh fetch) don't break the sort with a TypeError.
+    def _strip_tz(d):
+        ts = pd.Timestamp(d)
+        return ts.tz_localize(None) if ts.tz is not None else ts
+
+    all_dates = sorted({
+        _strip_tz(d)
+        for df in signaled.values()
+        for d in df.dropna(subset=["Signal"]).tail(lookback).index
+    })
     if not all_dates:
         return None
     recent = pd.DatetimeIndex(all_dates[-lookback:])

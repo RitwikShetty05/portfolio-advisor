@@ -220,7 +220,15 @@ class DataLoader:
 
         # Keep only what we need.
         df = df[[c for c in self.REQUIRED_COLUMNS if c in df.columns]].copy()
-        df.index = pd.to_datetime(df.index)
+        # Normalise to tz-naive timestamps. yfinance returns tz-AWARE indices
+        # on some endpoints (download() vs Ticker().history()) and tz-NAIVE
+        # on others, plus our CSV cache round-trip strips tz info. Mixing
+        # tz-aware and tz-naive Timestamps in a set/sorted() raises TypeError
+        # (see Streamlit Cloud deployment).
+        idx = pd.to_datetime(df.index)
+        if getattr(idx, "tz", None) is not None:
+            idx = idx.tz_localize(None)
+        df.index = idx
         df.index.name = "Date"
 
         self._write_cache(ticker, df)
