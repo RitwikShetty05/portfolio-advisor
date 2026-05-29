@@ -105,8 +105,18 @@ class PortfolioAnalyzer:
             )
 
         # ----- Build the aligned log-return panel -----
+        # Defensive tz strip: if a Series passed in still has a tz-aware
+        # index (cache leftover, fresh yfinance with tz), pd.DataFrame()'s
+        # automatic index union will TypeError with mixed tz-aware /
+        # tz-naive Series. Force every Series to tz-naive before joining.
+        def _series_naive(s: pd.Series) -> pd.Series:
+            if getattr(s.index, "tz", None) is not None:
+                s = s.copy()
+                s.index = s.index.tz_localize(None)
+            return s
+
         rets = pd.DataFrame({
-            t: signaled[t]["Adj_Return"] for t in self.tickers
+            t: _series_naive(signaled[t]["Adj_Return"]) for t in self.tickers
         }).dropna(how="any")
         if len(rets) < 30:
             raise ValueError(

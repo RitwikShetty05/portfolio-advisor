@@ -185,19 +185,18 @@ SIGNAL_COLORSCALE = [
 PLOTLY_TEMPLATE = "plotly_white"
 
 
-def add_range_selector(fig: go.Figure, row: int = 1, col: int = 1) -> go.Figure:
+def add_range_selector(fig: go.Figure, row: int | None = None,
+                       col: int | None = None) -> go.Figure:
     """Attach TradingView-style range chips to a date x-axis.
 
     Buttons rendered: ``5D · 1M · 3M · 6M · YTD · 1Y · 3Y · MAX``.
-    Clicking a chip zooms the entire chart (and any axes sharing this x)
-    to the matching trailing window — no rerun, no Streamlit round-trip,
-    pure Plotly. Matches the chart-interaction model that every retail
-    trader knows from TradingView / Zerodha Kite / Bloomberg Terminal.
 
-    For multi-row subplots with ``shared_xaxes=True``, pass ``row=1, col=1``
-    — Plotly applies the chosen range to every linked axis automatically.
+    Plotly subtlety: ``fig.update_xaxes(row=, col=)`` only works on figures
+    built with ``make_subplots`` (which set up an internal grid_ref). For
+    **simple** ``go.Figure()`` charts (single axis), passing row/col raises
+    an exception. So we pass row/col only when explicitly provided.
     """
-    fig.update_xaxes(
+    kwargs = dict(
         rangeselector=dict(
             buttons=[
                 dict(count=5,  label="5D",  step="day",   stepmode="backward"),
@@ -217,8 +216,11 @@ def add_range_selector(fig: go.Figure, row: int = 1, col: int = 1) -> go.Figure:
             x=0.0, y=1.12, xanchor="left", yanchor="bottom",
         ),
         rangeslider=dict(visible=False),
-        row=row, col=col,
     )
+    if row is not None and col is not None:
+        kwargs["row"] = row
+        kwargs["col"] = col
+    fig.update_xaxes(**kwargs)
     return fig
 
 

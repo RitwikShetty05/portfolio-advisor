@@ -150,6 +150,12 @@ class DataLoader:
             return None
         try:
             df = pd.read_csv(path, index_col=0, parse_dates=True)
+            # Defensive tz strip — older cache CSVs may have been written
+            # while tz-aware, and pandas's parse_dates round-trip can
+            # restore that. Force tz-naive so downstream set/sort operations
+            # don't TypeError on mixed Timestamps.
+            if getattr(df.index, "tz", None) is not None:
+                df.index = df.index.tz_localize(None)
             logger.debug("[%s] cache hit (%s)", ticker, path.name)
             return df
         except Exception as e:  # malformed cache — just refetch

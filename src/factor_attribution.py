@@ -229,6 +229,10 @@ class FactorAttribution:
                 df = loader._fetch_one(ticker)   # noqa: SLF001
                 close = df["Close"].copy()
                 close.index = pd.to_datetime(close.index)
+                # Defensive tz strip — concat below will TypeError if any
+                # one Series is tz-aware and others are tz-naive.
+                if getattr(close.index, "tz", None) is not None:
+                    close.index = close.index.tz_localize(None)
                 raw_closes[name] = close
             except Exception as e:
                 logger.warning("Factor %s (%s) skipped: %s", name, ticker, e)
