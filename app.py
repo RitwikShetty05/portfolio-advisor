@@ -136,6 +136,15 @@ st.markdown(
         }
         /* Slim down the default radio for the picker rows */
         .stRadio > div { gap: 0.4rem; }
+        /* Tighten the segmented_control above the Stock Analyzer chart
+           so the chips feel like part of the chart, not a separate widget. */
+        div[data-testid="stSegmentedControl"] {
+            margin-top: -0.4rem;
+            margin-bottom: -0.2rem;
+        }
+        div[data-testid="stSegmentedControl"] label {
+            font-size: 0.78rem;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1103,6 +1112,47 @@ def page_stock_analyzer(pipe: dict) -> None:
             f"Vol: {float(live.get('volume') or 0):,.0f}"
         )
 
+    # ---- Range chip menu (Streamlit-side, pill-shaped) ----
+    # Why this and not Plotly's rangeselector: Plotly's built-in chips have
+    # a documented bug with `shared_xaxes=True` subplots on the version
+    # Streamlit Cloud runs — clicks on 1M/3M wouldn't propagate to the
+    # visible bottom axis. We bypass that by filtering the dataframe in
+    # Streamlit before building the chart, guaranteeing all 4 rows zoom
+    # together.
+    _RANGES_DAYS: dict[str, int | None] = {
+        "5D": 5, "1M": 22, "3M": 66, "6M": 132,
+        "YTD": None, "1Y": 252, "3Y": 252 * 3, "MAX": None,
+    }
+    _picker = getattr(st, "segmented_control", None)
+    if _picker is not None:
+        range_choice = _picker(
+            "Range", options=list(_RANGES_DAYS.keys()),
+            default="1Y", key=f"stock_range_{ticker}",
+            label_visibility="collapsed",
+        )
+    else:
+        # Fallback for older Streamlit versions.
+        range_choice = st.radio(
+            "Range", options=list(_RANGES_DAYS.keys()),
+            index=5, horizontal=True,
+            key=f"stock_range_{ticker}",
+            label_visibility="collapsed",
+        )
+    if not range_choice:
+        range_choice = "1Y"
+
+    if range_choice == "MAX" or df.empty:
+        df_view = df
+    elif range_choice == "YTD":
+        ytd_start = pd.Timestamp(df.index[-1].year, 1, 1)
+        df_view = df.loc[df.index >= ytd_start]
+        if df_view.empty:
+            df_view = df
+    else:
+        n = _RANGES_DAYS[range_choice]
+        df_view = df.iloc[-n:] if (n is not None and len(df) > n) else df
+    df = df_view
+
     # ---- Combined 4-row chart: price/volume on top, RSI, MACD ----
     fig = make_subplots(
         rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.025,
@@ -1194,25 +1244,14 @@ def page_stock_analyzer(pipe: dict) -> None:
 
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
-        height=940, margin=dict(l=40, r=20, t=70, b=20),  # +30 top for chips
+        height=900, margin=dict(l=40, r=20, t=40, b=20),
         xaxis_rangeslider_visible=False, hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.03, x=0.32),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
         font=dict(family="Inter, system-ui, sans-serif", size=12),
     )
     for r in (1, 2, 3, 4):
         fig.update_xaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
         fig.update_yaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
-    # Original rangeselector chip menu at the top of the chart.
-    add_range_selector(fig, row=1, col=1)
-    # CRITICAL: explicitly link rows 2-4 to row 1's x-axis. `shared_xaxes=True`
-    # in make_subplots is supposed to set `matches='x'` on these rows, but on
-    # Streamlit Cloud's Plotly version the rangeselector's relayout doesn't
-    # propagate via that auto-matches consistently — clicks on 1M/3M would
-    # change xaxis.range but the visible (xaxis4) axis would stay at MAX.
-    # Re-asserting matches='x' AFTER all other update_xaxes calls forces
-    # the linkage to stick, so a single button click zooms all four rows.
-    for r in (2, 3, 4):
-        fig.update_xaxes(matches="x", row=r, col=1)
     st.plotly_chart(fig, use_container_width=True)
 
     # Trade plan card on active signals.
