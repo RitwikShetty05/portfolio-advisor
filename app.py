@@ -684,27 +684,28 @@ def render_top_status_bar(pipe: dict | None = None) -> None:
 
 
 def render_live_header() -> None:
-    """The standard band shown at the top of pages that benefit from a
-    "this is current" cue. Adapts to market-open vs market-closed states.
+    """A subtle right-aligned caption telling the user *which* trading-day's
+    data the page is showing.
+
+    Previously this was a two-column row with a left market-status pill +
+    right caption — but the top status bar (always visible) already shows
+    market state, so the pill was duplicated and added an awkward empty
+    row above each page. Reduced to a single caption line for clarity.
     """
     from src.live_quotes import last_trading_day
     open_now = is_market_open()
-    c1, c2 = st.columns([0.5, 0.5])
-    with c1:
-        st.markdown(live_market_status_badge(), unsafe_allow_html=True)
-    with c2:
-        if open_now:
-            right = (f"Live (delayed ~15–20 min) · "
-                     f"{now_ist():%d-%b-%Y %H:%M IST}")
-        else:
-            last_td = last_trading_day()
-            right = (f"Showing last close · "
-                     f"{last_td.strftime('%a %d-%b-%Y')}")
-        st.markdown(
-            f"<div style='text-align:right;color:#6b7280;font-size:0.8rem;'>"
-            f"{right}</div>",
-            unsafe_allow_html=True,
-        )
+    if open_now:
+        caption = (f"Live (delayed ~15–20 min) · "
+                   f"{now_ist().strftime('%d-%b-%Y %I:%M %p IST').lstrip('0')}")
+    else:
+        last_td = last_trading_day()
+        caption = f"Showing last close · {last_td.strftime('%a %d-%b-%Y')}"
+    st.markdown(
+        f"<div style='text-align:right;color:#94a3b8;font-size:0.78rem;"
+        f"margin-top:-0.8rem;margin-bottom:0.4rem;'>"
+        f"{caption}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ---------------------------------------------------------------------------
