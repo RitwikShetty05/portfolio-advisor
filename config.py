@@ -173,10 +173,12 @@ TRADING_DAYS: int = 252
 # ---------------------------------------------------------------------------
 # 7. Data quality gates
 # ---------------------------------------------------------------------------
-MIN_TRADING_DAYS: int = 150              # Reject tickers with <150 bars
+MIN_TRADING_DAYS: int = 100              # Reject tickers with <100 bars
 # Raised from 5% to 12% to tolerate ticker-specific data gaps caused by
 # corporate actions (e.g. TATAMOTORS.NS had a 2024 DVR-to-ordinary merger
 # that left yfinance with sparse history around the conversion date).
+# MIN_TRADING_DAYS lowered to 100 so post-demerger new listings (TMPV.NS,
+# TMCV.NS) with only ~5-6 months of history still load.
 MAX_MISSING_PCT: float = 0.12
 MAX_DAILY_RETURN: float = 0.50           # Flag any single-day move >50% as suspect
 
