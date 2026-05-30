@@ -289,10 +289,20 @@ class DataLoader:
             3. No zero/negative prices.
             4. No suspect single-day returns (``config.MAX_DAILY_RETURN``).
         """
+        # Measure missing-pct AFTER forward-filling short gaps (up to 3 days).
+        # Real corporate-action gaps (e.g. TATAMOTORS DVR→ordinary merger in
+        # Aug-2024) leave 1-3 day NaN runs that the pipeline can safely
+        # carry through but that the raw isna() check would flag as bad.
+        # Genuinely-missing runs (>3 days) still register as missing.
+        if df.empty or not all(c in df.columns for c in self.REQUIRED_COLUMNS):
+            missing_pct_effective = 1.0
+        else:
+            ffilled = df[self.REQUIRED_COLUMNS].ffill(limit=3)
+            missing_pct_effective = float(ffilled.isna().any(axis=1).mean())
+
         report = {
             "rows": int(len(df)),
-            "missing_pct": float(df[self.REQUIRED_COLUMNS].isna().any(axis=1).mean())
-            if not df.empty else 1.0,
+            "missing_pct": missing_pct_effective,
             "zero_or_neg_prices": int((df["Close"] <= 0).sum()) if "Close" in df else 0,
             "extreme_moves": 0,
             "passed": False,
