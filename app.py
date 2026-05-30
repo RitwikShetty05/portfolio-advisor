@@ -938,8 +938,12 @@ def page_dashboard(pipe: dict) -> None:
     # --- Fixed signal heat-map ---
     st.subheader("Signal heat-map — last 30 trading days")
     st.caption(
-        "Each row is a ticker, each cell is a day. "
-        f"🟢 = Buy, ⚪ = Hold, 🔴 = Sell. Hover for details."
+        "Each row is a ticker, each cell is a day.  "
+        "🟢 = Buy  ·  ⚪ Grey = Hold  ·  🔴 = Sell  ·  "
+        "**◻️ White = no data fetched for that day** "
+        "(usually yfinance rate-limiting on Streamlit Cloud — click "
+        "**🔄 Force refresh data** in the sidebar to retry). "
+        "Hover any cell for ticker / date / signal / confidence."
     )
     fig = build_signal_heatmap(signaled, lookback=30)
     if fig is None:
@@ -991,11 +995,18 @@ def build_signal_heatmap(signaled: dict[str, pd.DataFrame],
         conf = sub["Confidence"].astype(float)
         if sig.dropna().empty:
             continue
+        # Forward-fill the most-recent gap so a ticker that yfinance
+        # returned through 27-May still shows its last-known signal on
+        # 28-May instead of a white "no-data" cell. Limited to 3 days so a
+        # genuinely-delisted ticker still flags as missing.
+        sig = sig.ffill(limit=3)
+        conf = conf.ffill(limit=3)
+        labels_s = (sub["Signal_Strength"].astype(str)
+                     .replace("nan", pd.NA).ffill(limit=3).fillna("—"))
         tickers.append(t)
         z_rows.append(sig.values)
         conf_rows.append(conf.values)
-        labels = sub["Signal_Strength"].fillna("—").astype(str).values
-        label_rows.append(labels)
+        label_rows.append(labels_s.values)
 
     if not z_rows:
         return None
