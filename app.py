@@ -237,19 +237,51 @@ def add_range_selector(fig: go.Figure, row: int | None = None,
 
 
 def style_fig(fig: go.Figure, height: int = 380, top_margin: int = 20) -> go.Figure:
-    """Apply consistent margins / font / hover styling to any Plotly figure."""
+    """Apply consistent margins / font / hover styling to any Plotly figure.
+
+    Why all the explicit colors: Streamlit's dark theme leaks its text color
+    into Plotly via CSS inheritance, which makes chart axis labels, tick
+    text, and legend text render WHITE on a white plot background — invisible.
+    Setting font.color + paper_bgcolor + plot_bgcolor + per-axis tick/title
+    colors locks the chart appearance regardless of the user's Streamlit
+    theme.
+    """
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
         height=height,
         margin=dict(l=40, r=20, t=top_margin, b=30),
-        hoverlabel=dict(bgcolor="white", font_size=12),
-        font=dict(family="Inter, system-ui, sans-serif", size=12),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        hoverlabel=dict(bgcolor="white", font_size=12,
+                        font=dict(color="#1f2937")),
+        font=dict(family="Inter, system-ui, sans-serif", size=12,
+                  color="#1f2937"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0,
-                    font=dict(size=11)),
+                    font=dict(size=11, color="#1f2937")),
     )
-    fig.update_xaxes(showgrid=True, gridcolor=THEME["grid"], zeroline=False)
-    fig.update_yaxes(showgrid=True, gridcolor=THEME["grid"], zeroline=False)
+    fig.update_xaxes(
+        showgrid=True, gridcolor=THEME["grid"], zeroline=False,
+        tickfont=dict(color="#374151"), title_font=dict(color="#1f2937"),
+    )
+    fig.update_yaxes(
+        showgrid=True, gridcolor=THEME["grid"], zeroline=False,
+        tickfont=dict(color="#374151"), title_font=dict(color="#1f2937"),
+    )
     return fig
+
+
+def chart_text_kwargs() -> dict:
+    """Shared layout kwargs for charts that bypass style_fig (multi-row
+    subplots, treemaps, heatmaps). Same dark-text/white-bg lock as style_fig.
+    """
+    return dict(
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(family="Inter, system-ui, sans-serif",
+                  size=12, color="#1f2937"),
+        hoverlabel=dict(bgcolor="white", font_size=12,
+                        font=dict(color="#1f2937")),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -995,9 +1027,11 @@ def build_signal_heatmap(signaled: dict[str, pd.DataFrame],
         height=max(360, 22 * len(tickers) + 80),
         margin=dict(l=90, r=10, t=10, b=40),
         template=PLOTLY_TEMPLATE,
-        font=dict(family="Inter, system-ui, sans-serif", size=11),
-        xaxis=dict(side="bottom", tickangle=-45),
-        yaxis=dict(autorange="reversed"),     # alphabetic top → bottom feels natural
+        paper_bgcolor="white", plot_bgcolor="white",
+        font=dict(family="Inter, system-ui, sans-serif", size=11, color="#1f2937"),
+        hoverlabel=dict(bgcolor="white", font=dict(color="#1f2937")),
+        xaxis=dict(side="bottom", tickangle=-45, tickfont=dict(color="#374151")),
+        yaxis=dict(autorange="reversed", tickfont=dict(color="#374151")),
     )
     return fig
 
@@ -1255,12 +1289,23 @@ def page_stock_analyzer(pipe: dict) -> None:
         template=PLOTLY_TEMPLATE,
         height=900, margin=dict(l=40, r=20, t=40, b=20),
         xaxis_rangeslider_visible=False, hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
-        font=dict(family="Inter, system-ui, sans-serif", size=12),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0,
+                    font=dict(color="#1f2937")),
+        font=dict(family="Inter, system-ui, sans-serif", size=12, color="#1f2937"),
+        paper_bgcolor="white", plot_bgcolor="white",
+        hoverlabel=dict(bgcolor="white", font=dict(color="#1f2937")),
     )
     for r in (1, 2, 3, 4):
-        fig.update_xaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
-        fig.update_yaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1)
+        fig.update_xaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1,
+                          tickfont=dict(color="#374151"),
+                          title_font=dict(color="#1f2937"))
+        fig.update_yaxes(showgrid=True, gridcolor=THEME["grid"], row=r, col=1,
+                          tickfont=dict(color="#374151"),
+                          title_font=dict(color="#1f2937"))
+    # Subplot row titles ("Price + MAs", "Volume", "RSI 14", "MACD") render
+    # via annotations — force their color too so they're not white-on-white.
+    for ann in fig.layout.annotations:
+        ann.font = dict(color="#1f2937", size=13, family="Inter, system-ui, sans-serif")
     st.plotly_chart(fig, use_container_width=True)
 
     # Trade plan card on active signals.
@@ -1504,7 +1549,8 @@ def sector_treemap(sector_df: pd.DataFrame,
     fig.update_layout(template=PLOTLY_TEMPLATE, height=380,
                       margin=dict(l=0, r=0, t=0, b=0),
                       coloraxis_colorbar=dict(title="Ann. return",
-                                              tickformat=".0%", len=0.7))
+                                              tickformat=".0%", len=0.7),
+                      **chart_text_kwargs())
     return fig
 
 
@@ -1525,7 +1571,10 @@ def correlation_heatmap(corr: pd.DataFrame) -> go.Figure:
     ))
     fig.update_layout(template=PLOTLY_TEMPLATE, height=380,
                       margin=dict(l=10, r=10, t=10, b=10),
-                      yaxis=dict(autorange="reversed"))
+                      yaxis=dict(autorange="reversed",
+                                  tickfont=dict(color="#374151")),
+                      xaxis=dict(tickfont=dict(color="#374151")),
+                      **chart_text_kwargs())
     return fig
 
 
@@ -2287,7 +2336,10 @@ def monthly_returns_heatmap(daily_returns: pd.Series) -> go.Figure | None:
     fig.update_layout(template=PLOTLY_TEMPLATE,
                       height=max(220, 40 * len(grid) + 60),
                       margin=dict(l=50, r=20, t=20, b=20),
-                      yaxis=dict(autorange="reversed"))
+                      yaxis=dict(autorange="reversed",
+                                  tickfont=dict(color="#374151")),
+                      xaxis=dict(tickfont=dict(color="#374151")),
+                      **chart_text_kwargs())
     return fig
 
 
