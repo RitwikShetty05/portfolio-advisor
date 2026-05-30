@@ -55,7 +55,10 @@ UNIVERSE: list[str] = [
     # FMCG
     "HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS",
     # Automobiles
-    "MARUTI.NS", "TATAMOTORS.NS", "M&M.NS",
+    # NOTE: Tata Motors demerged into separate Passenger Vehicles (TMPV) and
+    # Commercial Vehicles (TMCV) entities, leaving the legacy TATAMOTORS.NS
+    # with empty yfinance history. Replaced with the two new tickers.
+    "MARUTI.NS", "TMPV.NS", "TMCV.NS", "M&M.NS",
     # Pharma
     "SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS",
     # Metals
@@ -208,7 +211,9 @@ NSE_SECTORS: dict[str, str] = {
 
     "HINDUNILVR.NS": "FMCG", "ITC.NS": "FMCG", "NESTLEIND.NS": "FMCG",
 
-    "MARUTI.NS": "Auto", "TATAMOTORS.NS": "Auto", "M&M.NS": "Auto",
+    "MARUTI.NS": "Auto", "TMPV.NS": "Auto", "TMCV.NS": "Auto",
+    "TATAMOTORS.NS": "Auto",                  # legacy alias (may be empty)
+    "M&M.NS": "Auto",
 
     "SUNPHARMA.NS": "Pharma", "DRREDDY.NS": "Pharma", "CIPLA.NS": "Pharma",
 

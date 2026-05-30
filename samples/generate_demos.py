@@ -230,7 +230,7 @@ def write_pdf_balanced() -> Path:
         ["HINDUNILVR.NS",  "35,000"],
         ["ITC.NS",         "20,000"],
         ["MARUTI.NS",      "30,000"],
-        ["TATAMOTORS.NS",  "15,000"],
+        ["TMPV.NS",        "15,000"],
         ["SUNPHARMA.NS",   "25,000"],
         ["DRREDDY.NS",     "25,000"],
     ]
