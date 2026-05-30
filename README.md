@@ -10,6 +10,26 @@
   <img alt="Benchmark" src="https://img.shields.io/badge/benchmark-NIFTY%2050-blue">
 </p>
 
+<p align="center">
+  <a href="https://ritwik-portfolio-advisor.streamlit.app">
+    <img alt="Live Demo" src="https://img.shields.io/badge/▶_Live_Demo-Streamlit_Cloud-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white">
+  </a>
+</p>
+
+## 🎬 Demo
+
+<p align="center">
+  <img src="docs/demo.gif" alt="AI Portfolio Advisor — 90-second walkthrough" width="720">
+</p>
+
+<p align="center">
+  <sub>
+    <a href="docs/demo.mp4">▶ Watch the higher-quality MP4 (3.2 MB)</a>
+    &nbsp;·&nbsp;
+    <a href="https://ritwik-portfolio-advisor.streamlit.app"><b>Try it live →</b></a>
+  </sub>
+</p>
+
 ---
 
 ## 🎯 What this system does
