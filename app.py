@@ -1225,9 +1225,12 @@ def build_signal_heatmap(signaled: dict[str, pd.DataFrame],
         zmin=-1, zmax=1,
         colorscale=SIGNAL_COLORSCALE,
         colorbar=dict(
-            title="Signal", tickvals=[-1, 0, 1],
+            title=dict(text="Signal", font=dict(color="#1f2937")),
+            tickvals=[-1, 0, 1],
             ticktext=["Sell", "Hold", "Buy"],
             len=0.6, thickness=14,
+            tickfont=dict(color="#374151"),
+            outlinecolor=THEME["grid"], outlinewidth=1,
         ),
         xgap=1, ygap=1,        # thin white grid for cell separation
         customdata=cdata,
@@ -1762,9 +1765,20 @@ def sector_treemap(sector_df: pd.DataFrame,
                       hovertemplate="<b>%{label}</b><br>Weight: %{value:.1%}"
                                     "<br>Ann. return: %{color:.1%}<extra></extra>")
     fig.update_layout(template=PLOTLY_TEMPLATE, height=380,
-                      margin=dict(l=0, r=0, t=0, b=0),
-                      coloraxis_colorbar=dict(title="Ann. return",
-                                              tickformat=".0%", len=0.7),
+                      # r=70 leaves room for the colorbar on the white paper;
+                      # without it the legend spilled into the dark app
+                      # background and its labels were invisible.
+                      margin=dict(l=0, r=70, t=0, b=0),
+                      coloraxis_colorbar=dict(
+                          # Explicit dark fonts: Streamlit's dark theme leaks
+                          # a light text colour into the Plotly SVG, which made
+                          # the "Ann. return" title + % ticks near-invisible on
+                          # the white colorbar. Locking the fill fixes it.
+                          title=dict(text="Ann. return",
+                                     font=dict(color="#1f2937")),
+                          tickformat=".0%", len=0.7,
+                          tickfont=dict(color="#374151"),
+                          outlinecolor=THEME["grid"], outlinewidth=1),
                       **chart_text_kwargs())
     return fig
 
@@ -1778,7 +1792,10 @@ def correlation_heatmap(corr: pd.DataFrame) -> go.Figure:
     fig = go.Figure(go.Heatmap(
         z=corr.values, x=corr.columns, y=corr.index,
         zmin=-1, zmax=1, colorscale="RdBu_r",
-        colorbar=dict(title="ρ", len=0.7, thickness=12),
+        colorbar=dict(title=dict(text="ρ", font=dict(color="#1f2937")),
+                      len=0.7, thickness=12,
+                      tickfont=dict(color="#374151"),
+                      outlinecolor=THEME["grid"], outlinewidth=1),
         text=np.round(corr.values, 2) if show_labels else None,
         texttemplate="%{text}" if show_labels else None,
         textfont={"size": 10},
@@ -2541,7 +2558,10 @@ def monthly_returns_heatmap(daily_returns: pd.Series) -> go.Figure | None:
                     (0.5, "#ffffff"),
                     (1.0, THEME["bull"])],
         zmid=0,
-        colorbar=dict(title="Return (%)", len=0.8, thickness=14),
+        colorbar=dict(title=dict(text="Return (%)", font=dict(color="#1f2937")),
+                      len=0.8, thickness=14,
+                      tickfont=dict(color="#374151"),
+                      outlinecolor=THEME["grid"], outlinewidth=1),
         text=np.where(np.isnan(grid.values), "", np.round(grid.values, 1).astype(str)),
         texttemplate="%{text}",
         textfont=dict(size=11),
