@@ -113,37 +113,241 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+        /* ============================================================
+           0. Design tokens
+           ------------------------------------------------------------
+           One source of truth for the motion language so every hover /
+           entrance reads as part of the same system. `--ease-out` is a
+           gentle decelerating curve (fast start, soft landing) that feels
+           "expensive"; `--dur-*` keep interactions snappy (<200ms) while
+           page entrances get a touch more room to breathe.
+           ============================================================ */
+        :root {
+            --ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+            --dur-fast:  0.15s;
+            --dur-med:   0.22s;
+            --dur-slow:  0.32s;
+            --card-radius: 0.7rem;
+            /* Shadows are pure black at low alpha so they read on BOTH the
+               light and dark Streamlit themes (a navy-tinted shadow vanishes
+               on a dark background). */
+            --lift-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+            --soft-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+        }
+
+        /* ============================================================
+           1. Tabular numerals (unchanged rationale)
+           ------------------------------------------------------------
+           `tabular-nums` makes digits equal-width so columns of numbers
+           line up vertically — the tell-tale of a real trading screen.
+           ============================================================ */
         html, body, [class*="css"], .stMetric, .stDataFrame,
         .stTabs, .stMarkdown, .stPlotlyChart {
             font-variant-numeric: tabular-nums;
             font-feature-settings: "tnum" 1;
         }
-        /* Push our content below Streamlit's built-in toolbar (Deploy / menu).
-           Without enough top padding the status bar gets clipped. */
-        .block-container {
-            padding-top: 3.2rem;
+        html { scroll-behavior: smooth; }
+
+        /* ============================================================
+           2. Fluid container + typography (scales with the viewport)
+           ------------------------------------------------------------
+           `clamp(min, preferred, max)` lets padding and headings grow
+           smoothly with screen width instead of snapping at breakpoints.
+           Top padding still clears Streamlit's floating toolbar; the
+           horizontal padding collapses toward the edges on phones so the
+           dense finance content keeps as much width as possible, then
+           tops out near Streamlit's wide default on a large monitor.
+           ============================================================ */
+        [data-testid="stMainBlockContainer"], .block-container {
+            padding-top:    clamp(2.6rem, 2.1rem + 1.6vw, 3.4rem);
             padding-bottom: 2rem;
+            padding-left:   clamp(0.9rem, 0.3rem + 2.6vw, 5rem);
+            padding-right:  clamp(0.9rem, 0.3rem + 2.6vw, 5rem);
+        }
+        [data-testid="stMainBlockContainer"] h1 {
+            font-size: clamp(1.55rem, 1.25rem + 1.5vw, 2.25rem);
+            line-height: 1.15;
+        }
+        [data-testid="stMainBlockContainer"] h2 {
+            font-size: clamp(1.25rem, 1.05rem + 0.9vw, 1.65rem);
+        }
+        [data-testid="stMainBlockContainer"] h3 {
+            font-size: clamp(1.05rem, 0.95rem + 0.6vw, 1.35rem);
+        }
+
+        /* ============================================================
+           3. Metric styling — KPI emphasis + subtle card treatment
+           ------------------------------------------------------------
+           Each KPI gets a faint panel so it has a surface to lift off on
+           hover (see §5). Colours are a THEME-NEUTRAL grey tint — a
+           translucent grey reads as a soft panel on the light theme AND
+           the dark theme, and we never touch the text colour, so there's
+           zero risk of the white-on-white invisibility bug the project has
+           been bitten by before. The value font-size is fluid so big
+           numbers stay legible on phones without overflowing on desktop.
+           ============================================================ */
+        [data-testid="stMetric"] {
+            background: rgba(128, 128, 128, 0.10);
+            border: 1px solid rgba(128, 128, 128, 0.22);
+            border-radius: var(--card-radius);
+            padding: 0.7rem 0.9rem;
+            transition: transform var(--dur-med) var(--ease-out),
+                        box-shadow var(--dur-med) var(--ease-out),
+                        border-color var(--dur-med) var(--ease-out),
+                        background var(--dur-med) var(--ease-out);
         }
         [data-testid="stMetricValue"] {
             font-weight: 700;
             letter-spacing: -0.01em;
+            font-size: clamp(1.05rem, 0.95rem + 0.55vw, 1.6rem);
         }
         [data-testid="stMetricLabel"] {
-            font-size: 0.78rem;
-            color: #6b7280;
+            font-size: clamp(0.68rem, 0.64rem + 0.15vw, 0.8rem);
+            color: #8b93a1;
             text-transform: uppercase;
             letter-spacing: 0.04em;
         }
-        /* Slim down the default radio for the picker rows */
+
+        /* ============================================================
+           4. Responsive column reflow — the core "works on any size" win
+           ------------------------------------------------------------
+           Streamlit lays `st.columns` out as a flex row. On a narrow
+           viewport a 4- or 5-up metric/ticker row would otherwise crush
+           each column to an unreadable sliver. We let the row wrap and
+           give every column a sensible min-width so it gracefully steps
+           down: full row -> 2-up on tablet -> single column on phone.
+           ============================================================ */
+        @media (max-width: 992px) {
+            [data-testid="stHorizontalBlock"] {
+                flex-wrap: wrap;
+                gap: 0.6rem 0.6rem;
+            }
+            [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+                flex: 1 1 220px;
+                min-width: 200px;
+            }
+        }
+        @media (max-width: 576px) {
+            [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+                flex: 1 1 100% !important;
+                min-width: 100% !important;
+            }
+        }
+
+        /* ============================================================
+           5. Fluid motion — entrances + hover micro-interactions
+           ------------------------------------------------------------
+           A short fade-up settles new content on each rerun so page and
+           tab switches feel like soft transitions rather than hard cuts.
+           Hover lifts give tactile feedback on the things users point at:
+           KPI cards, recommendation cards and buttons. Everything is
+           transform/opacity only (GPU-composited) so it stays at 60fps.
+           ============================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        [data-testid="stMainBlockContainer"] > div {
+            animation: fadeInUp var(--dur-slow) var(--ease-out);
+        }
+
+        /* KPI tiles lift on hover (theme-neutral tint deepens slightly) */
+        [data-testid="stMetric"]:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--lift-shadow);
+            border-color: rgba(128, 128, 128, 0.42);
+            background: rgba(128, 128, 128, 0.16);
+        }
+
+        /* Buttons — press-and-lift feedback */
+        .stButton > button, .stDownloadButton > button {
+            transition: transform var(--dur-fast) var(--ease-out),
+                        box-shadow var(--dur-fast) var(--ease-out),
+                        border-color var(--dur-fast) var(--ease-out),
+                        background var(--dur-fast) var(--ease-out);
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--soft-shadow);
+        }
+        .stButton > button:active, .stDownloadButton > button:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+
+        /* Tabs — smooth label + sliding-underline transitions, fade the panel */
+        .stTabs [data-baseweb="tab"] {
+            transition: color var(--dur-med) var(--ease-out),
+                        background var(--dur-med) var(--ease-out);
+        }
+        .stTabs [data-baseweb="tab-highlight"] {
+            transition: all var(--dur-slow) var(--ease-out);
+        }
+        .stTabs [data-baseweb="tab-panel"] {
+            animation: fadeInUp var(--dur-slow) var(--ease-out);
+        }
+
+        /* Expanders + dataframes — soft hover elevation */
+        [data-testid="stExpander"] {
+            border-radius: var(--card-radius);
+            transition: box-shadow var(--dur-med) var(--ease-out),
+                        border-color var(--dur-med) var(--ease-out);
+        }
+        [data-testid="stExpander"]:hover {
+            box-shadow: var(--soft-shadow);
+        }
+        [data-testid="stDataFrame"] {
+            border-radius: 0.5rem;
+            transition: box-shadow var(--dur-med) var(--ease-out);
+        }
+        [data-testid="stDataFrame"]:hover {
+            box-shadow: var(--soft-shadow);
+        }
+
+        /* Sidebar navigation — gentle slide + tint on hover */
+        [data-testid="stSidebar"] .stRadio label {
+            border-radius: 0.4rem;
+            padding: 0.12rem 0.45rem;
+            transition: background var(--dur-fast) var(--ease-out),
+                        transform var(--dur-fast) var(--ease-out);
+        }
+        [data-testid="stSidebar"] .stRadio label:hover {
+            background: rgba(30, 58, 95, 0.07);
+            transform: translateX(2px);
+        }
+
+        /* ============================================================
+           6. Picker rows + segmented control (unchanged rationale)
+           ============================================================ */
         .stRadio > div { gap: 0.4rem; }
-        /* Tighten the segmented_control above the Stock Analyzer chart
-           so the chips feel like part of the chart, not a separate widget. */
         div[data-testid="stSegmentedControl"] {
             margin-top: -0.4rem;
             margin-bottom: -0.2rem;
         }
         div[data-testid="stSegmentedControl"] label {
             font-size: 0.78rem;
+            transition: background var(--dur-fast) var(--ease-out),
+                        color var(--dur-fast) var(--ease-out);
+        }
+
+        /* ============================================================
+           7. Accessibility — honour "reduce motion"
+           ------------------------------------------------------------
+           Users who set prefers-reduced-motion (vestibular sensitivity)
+           get instant state changes: no entrances, no hover travel.
+           ============================================================ */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.001ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.001ms !important;
+                scroll-behavior: auto !important;
+            }
+            [data-testid="stMetric"]:hover,
+            .stButton > button:hover,
+            .stDownloadButton > button:hover {
+                transform: none !important;
+            }
         }
     </style>
     """,
