@@ -14,6 +14,10 @@
   <a href="https://ritwik-portfolio-advisor.streamlit.app">
     <img alt="Live Demo" src="https://img.shields.io/badge/▶_Live_Demo-Streamlit_Cloud-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white">
   </a>
+  &nbsp;
+  <a href="docs/whitepaper.pdf">
+    <img alt="Whitepaper" src="https://img.shields.io/badge/📄_Whitepaper-Read_the_PDF-1e3a5f?style=for-the-badge">
+  </a>
 </p>
 
 ## 🎬 Demo
@@ -220,38 +224,46 @@ RecommendationEngine.print_report(recs)
 
 ---
 
-## 📊 Sample tearsheet
+## 📊 Performance (real backtest)
 
 ```
 ============================================================
-  PERFORMANCE TEARSHEET   (2019-01-02 → 2024-12-30)
+  PERFORMANCE TEARSHEET   (2019-01-02 → 2026-05-29)
 ============================================================
   Initial Capital       : ₹       100,000
-  Final NAV             : ₹       247,832
-  Total Return          :          147.83%
-  CAGR                  :           16.42%
-  Annualised Volatility :           17.91%
+  Final NAV             : ₹       193,044
+  Total Return          :           93.00%
+  CAGR                  :            9.27%
+  Annualised Volatility :            8.28%
 
-  Sharpe Ratio          :           1.08
-  Sortino Ratio         :           1.62
-  Calmar Ratio          :           0.84
-  Max Drawdown          :          -19.55%   (2022-06-17)
+  Sharpe Ratio          :            0.37
+  Sortino Ratio         :            0.50
+  Calmar Ratio          :            0.84
+  Max Drawdown          :          -10.98%   (2022-06-20)
 
-  Trades                :            148
-  Win Rate              :           54.05%
-  Profit Factor         :           1.87
-  Avg Win  / Avg Loss   : ₹     2,140  /  ₹  -1,176
-  Expectancy / trade    : ₹       614
-  Max Consec. Losses    :              4
+  Trades                :            140
+  Win Rate              :           32.86%
+  Profit Factor         :            2.25
+  Avg Win  / Avg Loss   : ₹     2,310  /  ₹    -503
+  Expectancy / trade    : ₹       421
+  Max Consec. Losses    :             12
 
-  Alpha (annualised)    :            4.62%
-  Beta                  :           0.81
-  R²                    :           0.59
-  Outperformance        :          +23.40%
+  Alpha (annualised)    :            1.35%
+  Beta                  :            0.29
+  R²                    :            0.38
+  Outperformance        :          -24.98%
 ============================================================
 ```
 
-> *Illustrative numbers. Actual performance depends on the universe, date range, and regime method chosen.*
+> **Real numbers — 2019–2026, 26-stock NIFTY universe, HMM regime, default settings.**
+> This is a **defensive** strategy: it trades absolute return for risk control. It earns a
+> **higher risk-adjusted return than buy-and-hold NIFTY** (Sharpe 0.37 vs ≈0.26) at **roughly
+> one-third the drawdown** (−11% vs −38%), with lower beta (0.29) and therefore lower absolute
+> return. The **[whitepaper](docs/whitepaper.pdf)** reports the full validation — bootstrap
+> confidence interval, Probabilistic & Deflated Sharpe, Newey–West HAC alpha, a four-factor
+> attribution, and an anchored **walk-forward out-of-sample** test (OOS Sharpe +0.13). It is
+> candid that the *factor-adjusted* alpha is **not** statistically significant: the edge is
+> regime-based **risk management**, not security selection.
 
 ---
 
