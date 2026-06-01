@@ -906,11 +906,12 @@ def render_top_status_bar(pipe: dict | None = None) -> None:
                     overflow-x:auto;
                     min-height:40px;'>
             <div style='display:flex;flex-wrap:nowrap;align-items:center;
-                        line-height:1.3;flex:1 1 auto;'>
+                        line-height:1.3;flex:1 1 auto;
+                        justify-content:space-between;padding-right:16px;'>
                 {left_html}
             </div>
             <div style='display:flex;align-items:center;white-space:nowrap;
-                        margin-left:auto;padding-left:10px;'>
+                        flex:0 0 auto;padding-left:14px;'>
                 {right_html}
             </div>
         </div>
