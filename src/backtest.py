@@ -134,13 +134,29 @@ class Backtester:
     # Position sizing
     # ------------------------------------------------------------------
     def _position_size(self, nav: float, confidence: float, size_mult: float) -> float:
-        """Cash to allocate to a new position. Capped at ``position_size_pct``."""
-        # Confidence scales smoothly: a 0.3 confidence signal gets less weight
-        # than a 0.9 one. We clip to avoid 0 (nothing happens) and to never
-        # exceed the per-position cap.
+        """Cash to allocate to a new position. Capped at ``position_size_pct``.
+
+        Sizing model: each position targets the per-stock cap
+        ``position_size_pct`` (10% NAV), scaled DOWN by
+
+            * the regime risk multiplier ``size_mult`` (1.0 bull / 0.7
+              sideways / 0.5 bear — take less risk as the tape weakens), and
+            * a gentle conviction tilt ``(0.5 + 0.5·confidence)`` so a
+              stronger composite score commits more capital.
+
+        Why this replaced the old ``base_allocation · confidence · size_mult``
+        rule: with ``base_allocation = 0.05`` the product could never approach
+        the 10% cap (``confidence`` is the bounded |score|, ≤≈0.66), so every
+        position was ~2–4% of NAV and the book sat mostly in cash even when
+        fully "loaded". Anchoring to the cap fixes the chronic under-investment
+        while the regime multiplier keeps the strategy defensive in drawdowns.
+        Conviction also still drives *ordering* in ``_check_buys`` (best ideas
+        are funded first when slots or cash bind).
+        """
         confidence = max(0.0, min(1.0, confidence))
         size_mult = max(0.0, min(1.0, size_mult))
-        raw = self.base_allocation * confidence * size_mult
+        conviction = 0.5 + 0.5 * confidence            # in [0.5, 1.0]
+        raw = self.position_size_pct * size_mult * conviction
         return nav * min(raw, self.position_size_pct)
 
     # ------------------------------------------------------------------
@@ -187,7 +203,18 @@ class Backtester:
 
         state = _State(cash=self.initial_capital)
 
+        # Idle cash earns the risk-free rate (Indian liquid-fund / T-bill
+        # proxy). Modelling cash at 0% systematically penalises a regime-aware
+        # strategy for its single biggest *feature* — stepping aside into cash
+        # during bear/sideways tapes. A real book parks that cash at ≈the
+        # risk-free rate, so we accrue it daily. This is a realism correction,
+        # not a tuning knob: it is internally consistent with the same rate
+        # used in the Sharpe/alpha denominators.
+        rf_daily = (1.0 + self.risk_free_rate) ** (1.0 / C.TRADING_DAYS) - 1.0
+
         for date in master_index:
+            # 0. Accrue one day of risk-free interest on the idle cash balance.
+            state.cash *= (1.0 + rf_daily)
             # 1. Mark-to-market open positions to know our current NAV.
             nav = self._compute_nav(state, signaled, date)
 

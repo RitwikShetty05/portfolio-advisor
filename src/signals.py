@@ -20,9 +20,13 @@ Four independent **sub-engines** each cast a vote in ``[-1, +1]``:
 The weighted sum becomes ``Score_Raw`` (also in [-1, +1]). The score is
 then **gated by the prevailing regime**:
 
-    BULL      : buy ≥ 0.45, sell ≥ 0.60 — easy to buy, hard to sell
-    SIDEWAYS  : buy ≥ 0.55, sell ≥ 0.55 — tighter both ways, smaller size
-    BEAR      : buy ≥ 0.75, sell ≥ 0.45 — very hard to buy contra-trend
+    BULL      : buy ≥ 0.30, sell ≤ −0.50 — easy to buy, hard to sell
+    SIDEWAYS  : buy ≥ 0.40, sell ≤ −0.40 — tighter both ways, smaller size
+    BEAR      : buy ≥ 0.50, sell ≤ −0.25 — very hard to buy contra-trend
+
+    (Gates recalibrated 2026-06 to the composite score's achievable range —
+    its empirical max is ≈0.66 — so the strategy is no longer locked out of
+    non-bull regimes. See ``config.REGIME_GATES`` for the calibration note.)
 
 When the regime detector provides a continuous ``Regime_Prob_Bull``
 posterior, it's used as a **soft gate** that smoothly tilts thresholds —

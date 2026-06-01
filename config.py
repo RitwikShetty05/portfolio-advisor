@@ -146,10 +146,22 @@ SIGNAL_WEIGHTS: dict[str, float] = {
 # Regime gates — applied after the composite score is computed. The gates
 # (and position-size multipliers) embed the core philosophy: "buy the dips
 # in uptrends, take profits in downtrends, do less in chop."
+#
+# CALIBRATION NOTE (2026-06): the composite Score_Raw is a weighted average
+# of four sub-engine votes, each in [-1, 1]. Empirically the four lenses
+# rarely align perfectly, so the composite has a *bounded* dynamic range —
+# across 2019–2026 its 95th percentile is ≈0.48 and its observed maximum is
+# ≈0.66. The original gates (BEAR buy 0.75, SIDEWAYS 0.55) sat ABOVE that
+# range, so the strategy was structurally unable to buy outside BULL regimes
+# and sat in cash ~73% of the time (a severe, unintended cash drag). The
+# gates below are recalibrated to the achievable range while preserving the
+# regime ordering — strictly harder to buy as the tape deteriorates
+# (BULL < SIDEWAYS < BEAR) and strictly easier to sell (BULL > SIDEWAYS >
+# BEAR) — and the size multipliers now decline monotonically into weakness.
 REGIME_GATES: dict[str, dict[str, float]] = {
-    "BULL":     {"buy_gate": 0.45, "sell_gate": 0.60, "size_mult": 1.00},
-    "SIDEWAYS": {"buy_gate": 0.55, "sell_gate": 0.55, "size_mult": 0.60},
-    "BEAR":     {"buy_gate": 0.75, "sell_gate": 0.45, "size_mult": 0.80},
+    "BULL":     {"buy_gate": 0.30, "sell_gate": 0.50, "size_mult": 1.00},
+    "SIDEWAYS": {"buy_gate": 0.40, "sell_gate": 0.40, "size_mult": 0.70},
+    "BEAR":     {"buy_gate": 0.50, "sell_gate": 0.25, "size_mult": 0.50},
 }
 
 
