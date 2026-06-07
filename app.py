@@ -962,7 +962,9 @@ def holdings_uploader(key_prefix: str,
         "📥 Download template",
     ])
 
-    sess_key = f"{key_prefix}_holdings"
+    # ONE shared portfolio across the whole app — upload (or type) once on
+    # either the Portfolio Analyzer or Recommendations page and both use it.
+    sess_key = "my_holdings"
 
     with tab_upload:
         st.caption(
@@ -1067,7 +1069,8 @@ def holdings_uploader(key_prefix: str,
     #   2. holdings you committed from a FILE upload (persisted in session),
     #   3. the example / default starter text.
     if text_is_custom:
-        st.session_state.pop(sess_key, None)
+        # Typing your own holdings commits them as the shared portfolio too.
+        st.session_state[sess_key] = text_holdings
         return text_holdings
     if st.session_state.get(sess_key):
         return st.session_state[sess_key]
