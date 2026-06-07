@@ -962,7 +962,7 @@ def holdings_uploader(key_prefix: str,
         "📥 Download template",
     ])
 
-    holdings: dict[str, float] = {}
+    sess_key = f"{key_prefix}_holdings"
 
     with tab_upload:
         st.caption(
@@ -972,6 +972,18 @@ def holdings_uploader(key_prefix: str,
             "**+ Quantity & Avg Price**. Stocks are matched by symbol *or* "
             "**ISIN**; non-equity rows (e.g. gold/silver ETFs) are skipped."
         )
+        # If a previous upload was committed, show it's the ACTIVE selection
+        # (so the page analyses your file, not the example text) and let the
+        # user clear it to switch back.
+        if st.session_state.get(sess_key):
+            c_a, c_b = st.columns([0.72, 0.28])
+            c_a.success(
+                f"✓ Using your **{len(st.session_state[sess_key])}** uploaded "
+                "holding(s) — this overrides the example in *Type / Paste*."
+            )
+            if c_b.button("✖ Clear uploaded", key=f"{key_prefix}_clear"):
+                st.session_state.pop(sess_key, None)
+                st.rerun()
         up = st.file_uploader(
             "Choose file", type=["csv", "xlsx", "xls", "pdf"],
             key=f"{key_prefix}_upload",
@@ -991,8 +1003,11 @@ def holdings_uploader(key_prefix: str,
                 )
                 if st.button("✅ Use these holdings", key=f"{key_prefix}_use",
                              type="primary"):
-                    holdings = parsed
-                    st.session_state[f"{key_prefix}_holdings"] = parsed
+                    # Persist to session_state and rerun so the selection
+                    # survives the separate "Analyze" click and takes
+                    # precedence over the example text below.
+                    st.session_state[sess_key] = parsed
+                    st.rerun()
             except Exception as e:
                 st.error(f"Couldn't parse the file: {e}")
                 st.info(
@@ -1002,6 +1017,7 @@ def holdings_uploader(key_prefix: str,
                     "tab for a working example."
                 )
 
+    text_holdings: dict[str, float] = {}
     with tab_text:
         raw = st.text_area(
             "One `TICKER, AMOUNT` per line",
@@ -1013,9 +1029,13 @@ def holdings_uploader(key_prefix: str,
                 continue
             try:
                 t, a = [x.strip() for x in line.split(",", 1)]
-                holdings[t] = float(a.replace(",", "").replace("₹", "").replace("Rs", ""))
+                text_holdings[t] = float(
+                    a.replace(",", "").replace("₹", "").replace("Rs", ""))
             except Exception:
                 pass
+    # Did the user actually type their own holdings, or is this still the
+    # example default? Only treat it as a real choice if they changed it.
+    text_is_custom = (raw.strip() != default_text.strip()) and bool(text_holdings)
 
     with tab_template:
         st.caption("Download a starter template, edit the rows, then upload it back.")
@@ -1042,10 +1062,16 @@ def holdings_uploader(key_prefix: str,
             use_container_width=True, key=f"{key_prefix}_tmpl_detailed",
         )
 
-    # Session state lets the "Use these holdings" button persist across reruns.
-    if not holdings and f"{key_prefix}_holdings" in st.session_state:
-        holdings = st.session_state[f"{key_prefix}_holdings"]
-    return holdings
+    # Source of truth, in priority order:
+    #   1. holdings you TYPED in the paste box (overrides a stale upload),
+    #   2. holdings you committed from a FILE upload (persisted in session),
+    #   3. the example / default starter text.
+    if text_is_custom:
+        st.session_state.pop(sess_key, None)
+        return text_holdings
+    if st.session_state.get(sess_key):
+        return st.session_state[sess_key]
+    return text_holdings
 
 
 # ---------------------------------------------------------------------------
