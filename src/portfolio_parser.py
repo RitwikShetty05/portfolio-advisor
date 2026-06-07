@@ -93,6 +93,27 @@ PRICE_SYNONYMS: tuple[str, ...] = (
     "avgprice", "averageprice", "avgcost", "averagecost",
     "buyprice", "purchaseprice", "cost", "costprice",
 )
+ISIN_SYNONYMS: tuple[str, ...] = ("isin", "isincode", "isinnumber")
+
+# Curated ISIN → NSE symbol map. ISIN is the one *exact*, broker-agnostic
+# identifier in a holdings statement — Groww, for instance, lists only the
+# company name + ISIN, never the trading symbol, so cleaning the name column
+# ("HDFC BANK LTD" → "HDFC.NS") gives the wrong ticker. We resolve via ISIN
+# first and fall back to cleaning the name/ticker column. Extend freely — but
+# only add HIGH-CONFIDENCE rows (a wrong entry silently mis-attributes a
+# holding, which is worse than failing to resolve it).
+ISIN_TO_SYMBOL: dict[str, str] = {
+    # common NIFTY large-caps
+    "INE002A01018": "RELIANCE", "INE467B01029": "TCS",  "INE009A01021": "INFY",
+    "INE040A01034": "HDFCBANK", "INE090A01021": "ICICIBANK", "INE062A01020": "SBIN",
+    "INE154A01025": "ITC", "INE397D01024": "BHARTIARTL", "INE030A01027": "HINDUNILVR",
+    "INE237A01028": "KOTAKBANK", "INE238A01034": "AXISBANK",
+    # equities seen in real user holdings (labelled by the statement itself)
+    "INE267A01025": "HINDZINC",   # Hindustan Zinc
+    "INE155A01022": "TMPV",       # Tata Motors Passenger Vehicles
+    "INE1TAE01010": "TMCV",       # Tata Motors Ltd (commercial vehicles)
+    "INE976I01016": "TATACAP",    # Tata Capital
+}
 
 
 def _norm(s: str) -> str:
@@ -112,6 +133,66 @@ def _find_column(headers: Sequence[str], synonyms: tuple[str, ...]) -> str | Non
             if syn in n:
                 return h
     return None
+
+
+def _find_header_row(rows: Sequence[Sequence[object]]) -> int | None:
+    """Find the index of the row that is the real table header.
+
+    Broker exports (Groww, Zerodha, ICICI Direct, …) prepend a title +
+    account-summary block, so the header is rarely row 0. We scan for the
+    first row whose cells contain a ticker/ISIN synonym AND an amount synonym
+    (or a quantity + price pair) — that combination is unambiguously a column
+    header, not a metadata line. Returns None if nothing qualifies.
+    """
+    for i, row in enumerate(rows[:60]):
+        cells = [str(c) for c in row if c is not None and str(c).strip() != ""]
+        if len(cells) < 2:
+            continue
+        has_id = (_find_column(cells, TICKER_SYNONYMS) is not None
+                  or _find_column(cells, ISIN_SYNONYMS) is not None)
+        has_amt = (_find_column(cells, AMOUNT_SYNONYMS) is not None
+                   or (_find_column(cells, QTY_SYNONYMS) is not None
+                       and _find_column(cells, PRICE_SYNONYMS) is not None))
+        if has_id and has_amt:
+            return i
+    return None
+
+
+def _reframe(raw: pd.DataFrame) -> pd.DataFrame:
+    """Promote the real header row of a ``header=None`` frame to column names.
+
+    Locates the table header via :func:`_find_header_row`, uses it as the
+    columns, and returns the rows below it. Falls back to treating row 0 as
+    the header when no table-like header is found — so clean single-table
+    files (our own template, simple CSVs) behave exactly as before.
+    """
+    if raw.empty:
+        return raw
+    rows = raw.values.tolist()
+    h = _find_header_row(rows)
+    if h is None:
+        h = 0
+    data = raw.iloc[h + 1:].reset_index(drop=True).copy()
+    ncol = data.shape[1]
+    names: list[str] = []
+    for j in range(ncol):
+        x = rows[h][j] if j < len(rows[h]) else None
+        label = "" if x is None else str(x).strip()
+        if label == "" or label.lower() == "nan":
+            label = f"Unnamed: {j}"
+        names.append(label)
+    # De-duplicate so pandas accepts the columns.
+    seen: dict[str, int] = {}
+    final: list[str] = []
+    for nm in names:
+        if nm in seen:
+            seen[nm] += 1
+            final.append(f"{nm}.{seen[nm]}")
+        else:
+            seen[nm] = 0
+            final.append(nm)
+    data.columns = final
+    return data
 
 
 def _clean_ticker(raw: object) -> str | None:
@@ -175,51 +256,59 @@ def _holdings_from_dataframe(df: pd.DataFrame) -> dict[str, float]:
 
     headers = list(df.columns)
     ticker_col = _find_column(headers, TICKER_SYNONYMS)
+    isin_col = _find_column(headers, ISIN_SYNONYMS)
     amount_col = _find_column(headers, AMOUNT_SYNONYMS)
     qty_col = _find_column(headers, QTY_SYNONYMS)
     price_col = _find_column(headers, PRICE_SYNONYMS)
 
-    if ticker_col is None:
+    if ticker_col is None and isin_col is None:
         raise ValueError(
-            f"Couldn't find a ticker/symbol column. Headers were: {headers}"
+            f"Couldn't find a ticker/symbol/ISIN column. Headers were: {headers}"
         )
-
-    if amount_col is not None:
-        # Compact schema.
-        scheme = f"Ticker={ticker_col!r}, Amount={amount_col!r}"
-        pairs = zip(df[ticker_col], df[amount_col])
-        get_amount = lambda t, a: _clean_amount(a)  # noqa: E731
-    elif qty_col is not None and price_col is not None:
-        # Detailed schema — amount = qty × price.
-        scheme = f"Ticker={ticker_col!r}, Qty={qty_col!r}, AvgPrice={price_col!r}"
-        pairs = zip(df[ticker_col], df[qty_col], df[price_col])
-
-        def get_amount(t, *vals):
-            q = _clean_amount(vals[0])
-            p = _clean_amount(vals[1])
-            return q * p if q is not None and p is not None else None
-        # Re-pack the tuples so the loop below sees (ticker, *value_cells).
-        pairs = list(pairs)
-    else:
+    if amount_col is None and not (qty_col is not None and price_col is not None):
         raise ValueError(
             "Couldn't find a usable amount column. Need either an Amount/Value "
             "column, or both a Quantity and Avg-Price column. "
             f"Headers were: {headers}"
         )
 
+    scheme = (f"Ticker={ticker_col!r}, ISIN={isin_col!r}, "
+              + (f"Amount={amount_col!r}" if amount_col is not None
+                 else f"Qty={qty_col!r}, AvgPrice={price_col!r}"))
     logger.info("Holdings parser using schema: %s", scheme)
 
-    out: dict[str, float] = {}
-    for row in pairs:
-        if amount_col is not None:
-            t_raw, a_raw = row
-            ticker = _clean_ticker(t_raw)
-            amount = get_amount(t_raw, a_raw)
-        else:
-            t_raw = row[0]
-            ticker = _clean_ticker(t_raw)
-            amount = get_amount(t_raw, *row[1:])
+    def resolve_ticker(row) -> str | None:
+        # ISIN is the exact identifier — try it before falling back to the
+        # (often name-based) symbol column.
+        if isin_col is not None:
+            sym = ISIN_TO_SYMBOL.get(str(row[isin_col]).strip().upper())
+            if sym:
+                return f"{sym}.NS"
+            # ISIN present but unmapped: in these exports the "symbol" column is
+            # really a company NAME (e.g. "ICICI PRUDENTIAL GOLD ETF"), so
+            # cleaning it would fabricate a junk ticker. Only fall back if the
+            # value is genuinely symbol-like (single short token). Otherwise
+            # skip — better to drop the row than mis-attribute it.
+            if ticker_col is not None:
+                val = str(row[ticker_col]).strip()
+                if val and " " not in val and len(val) <= 12:
+                    return _clean_ticker(val)
+            return None
+        if ticker_col is not None:
+            return _clean_ticker(row[ticker_col])
+        return None
 
+    def resolve_amount(row) -> float | None:
+        if amount_col is not None:
+            return _clean_amount(row[amount_col])
+        q = _clean_amount(row[qty_col])
+        p = _clean_amount(row[price_col])
+        return q * p if q is not None and p is not None else None
+
+    out: dict[str, float] = {}
+    for _, row in df.iterrows():
+        ticker = resolve_ticker(row)
+        amount = resolve_amount(row)
         if ticker is None or amount is None:
             continue
         # If the ticker appears twice (e.g. multiple lots), sum them.
@@ -227,8 +316,8 @@ def _holdings_from_dataframe(df: pd.DataFrame) -> dict[str, float]:
 
     if not out:
         raise ValueError(
-            "Parsed the file but found 0 valid (ticker, amount) rows. "
-            "Check that your ticker column has NSE symbols and amounts are positive."
+            "Parsed the file but found 0 valid (ticker, amount) rows. Check "
+            "that your symbol/ISIN column is recognised and amounts are positive."
         )
     return out
 
@@ -237,15 +326,23 @@ def _holdings_from_dataframe(df: pd.DataFrame) -> dict[str, float]:
 # Format-specific entry points
 # ---------------------------------------------------------------------------
 def parse_csv(file: BinaryIO | str | Path) -> dict[str, float]:
-    """Parse a CSV file (file-like, str path, or Path)."""
-    df = pd.read_csv(file)
-    return _holdings_from_dataframe(df)
+    """Parse a CSV file (file-like, str path, or Path).
+
+    Read with ``header=None`` so :func:`_reframe` can skip any broker preamble
+    and locate the real header row, rather than blindly trusting line 1.
+    """
+    raw = pd.read_csv(file, header=None, dtype=str, keep_default_na=False)
+    return _holdings_from_dataframe(_reframe(raw))
 
 
 def parse_excel(file: BinaryIO | str | Path) -> dict[str, float]:
-    """Parse an Excel file. Reads the FIRST sheet only."""
-    df = pd.read_excel(file, engine="openpyxl")
-    return _holdings_from_dataframe(df)
+    """Parse an Excel file (first sheet only).
+
+    Read with ``header=None`` so the title/summary block that brokers (Groww,
+    Zerodha, …) put above the holdings table doesn't get mistaken for headers.
+    """
+    raw = pd.read_excel(file, engine="openpyxl", header=None)
+    return _holdings_from_dataframe(_reframe(raw))
 
 
 def parse_pdf(file: BinaryIO | str | Path) -> dict[str, float]:
@@ -273,15 +370,16 @@ def parse_pdf(file: BinaryIO | str | Path) -> dict[str, float]:
             for tbl_no, table in enumerate(page.extract_tables() or [], start=1):
                 if not table or len(table) < 2:
                     continue
-                # First row → header; rest → data.
-                header_row = [str(c) if c is not None else "" for c in table[0]]
-                data_rows = [
-                    [str(c) if c is not None else "" for c in row]
-                    for row in table[1:]
+                # Build a header-less frame and let _reframe find the real
+                # header row inside the table (brokers sometimes stack a
+                # summary block above the holdings rows on the same page).
+                cleaned = [
+                    [(str(c) if c is not None else "") for c in row]
+                    for row in table
                 ]
-                df = pd.DataFrame(data_rows, columns=header_row)
+                raw = pd.DataFrame(cleaned)
                 try:
-                    h = _holdings_from_dataframe(df)
+                    h = _holdings_from_dataframe(_reframe(raw))
                 except Exception as e:
                     errors.append(f"page {page_no} table {tbl_no}: {e}")
                     continue
@@ -368,3 +466,20 @@ if __name__ == "__main__":
     })
     csv_detail.to_csv("/tmp/_detail.csv", index=False)
     print("Detail CSV →", parse_holdings_file("/tmp/_detail.csv"))
+
+    # Broker export with a preamble + name + ISIN (Groww holdings style):
+    # header is NOT on row 1, and the symbol must be resolved from ISIN.
+    import openpyxl
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["Name", "Ritwik Shetty"])
+    ws.append(["Unique Client Code", "1702126871"])
+    ws.append(["Holdings statement for stocks as on 06-06-2026"])
+    ws.append(["Summary"]); ws.append(["Invested Value", 64766])
+    ws.append([])
+    ws.append(["Stock Name", "ISIN", "Quantity", "Average buy price",
+               "Buy value", "Closing value"])
+    ws.append(["HDFC BANK LTD", "INE040A01034", 4, 1003, 4012, 2988.2])
+    ws.append(["TATA MOTORS PASS VEH LTD", "INE155A01022", 40, 493.86, 19754.4, 15912])
+    ws.append(["HINDUSTAN ZINC LIMITED", "INE267A01025", 7, 640.45, 4483.15, 3967.6])
+    wb.save("/tmp/_groww.xlsx")
+    print("Groww-style XLSX →", parse_holdings_file("/tmp/_groww.xlsx"))
