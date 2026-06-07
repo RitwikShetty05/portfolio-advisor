@@ -123,6 +123,15 @@ class PortfolioAnalyzer:
                 f"Only {len(rets)} aligned trading days — need at least 30."
             )
         self.returns_panel = rets
+        # Per-stock metrics use each ticker's OWN full history (see
+        # _compute_stock_metrics). The aligned panel above is ONLY for the
+        # cross-sectional covariance / correlation, which genuinely need a
+        # common window; using it for standalone per-stock stats would let one
+        # recently-listed holding truncate every blue-chip's history.
+        self.returns_full = {
+            t: _series_naive(signaled[t]["Adj_Return"]).dropna()
+            for t in self.tickers
+        }
 
         # Annualised covariance and correlation (log returns, ×252).
         self.cov = rets.cov() * C.TRADING_DAYS
@@ -197,12 +206,16 @@ class PortfolioAnalyzer:
     # 2. Per-stock metrics
     # ------------------------------------------------------------------
     def _compute_stock_metrics(self) -> None:
-        rets = self.returns_panel
+        # Use each stock's FULL history, not the aligned panel — otherwise a
+        # single recently-listed holding (a few months of data) truncates every
+        # stock's return / vol / Sharpe to that short common window and makes
+        # blue-chips look absurd (e.g. HDFCBANK at -50%/yr over 8 months when
+        # its true full-history figure is +5%/yr).
         rf_daily = (1.0 + self.risk_free_rate) ** (1.0 / C.TRADING_DAYS) - 1.0
 
         rows = []
         for t in self.tickers:
-            r = rets[t]
+            r = self.returns_full[t]
             r_simple = np.expm1(r)
             ann_ret = float(r.mean() * C.TRADING_DAYS)
             ann_vol = float(r.std() * np.sqrt(C.TRADING_DAYS))
@@ -363,6 +376,28 @@ class PortfolioAnalyzer:
     # ------------------------------------------------------------------
     def _compute_warnings(self) -> None:
         warns: list[dict] = []
+
+        # Short-history holding(s): a recently-listed stock truncates the
+        # COMMON window used for portfolio-level return/risk (per-stock stats
+        # already use full history — see _compute_stock_metrics). Flag it so
+        # the portfolio aggregates aren't misread as a 7-year track record.
+        if getattr(self, "returns_full", None):
+            lengths = {t: len(r) for t, r in self.returns_full.items()}
+            max_len = max(lengths.values()) if lengths else 0
+            common_len = len(self.returns_panel)
+            short = [t for t, n in lengths.items() if max_len and n < 0.6 * max_len]
+            if short and max_len and common_len < 0.6 * max_len:
+                warns.append({
+                    "type": "SHORT_HISTORY",
+                    "severity": "MEDIUM",
+                    "message": (
+                        f"{', '.join(short)} {'has' if len(short) == 1 else 'have'} "
+                        f"limited price history — portfolio-level return/risk are "
+                        f"measured over the ~{common_len / C.TRADING_DAYS:.1f}-yr "
+                        f"common window. Per-stock figures use full history."
+                    ),
+                    "value": float(common_len),
+                })
 
         # Single-stock concentration > 30% — almost always a HIGH alert.
         for t, w in self.weights.items():
