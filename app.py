@@ -966,9 +966,11 @@ def holdings_uploader(key_prefix: str,
 
     with tab_upload:
         st.caption(
-            "Upload a broker export. Auto-detects whichever schema you have: "
-            "**Ticker + Amount** or **Ticker + Quantity + Avg Price**. "
-            "Synonyms recognised (Symbol/Scrip, Value/Investment, Qty, etc.)."
+            "Upload a broker export (Groww, Zerodha, ICICI Direct…) — any "
+            "title/summary block at the top is skipped automatically. "
+            "Auto-detects your schema: **Ticker/ISIN + Amount**, or "
+            "**+ Quantity & Avg Price**. Stocks are matched by symbol *or* "
+            "**ISIN**; non-equity rows (e.g. gold/silver ETFs) are skipped."
         )
         up = st.file_uploader(
             "Choose file", type=["csv", "xlsx", "xls", "pdf"],
@@ -994,9 +996,9 @@ def holdings_uploader(key_prefix: str,
             except Exception as e:
                 st.error(f"Couldn't parse the file: {e}")
                 st.info(
-                    "Tip: the file needs a column for the ticker (Symbol / "
-                    "Ticker / Scrip…) and either an Amount column or a "
-                    "Quantity + Avg-Price pair. See the **Download template** "
+                    "Tip: the file needs a column identifying the stock (Symbol "
+                    "/ Ticker / Scrip / **ISIN**) and either an Amount column or "
+                    "a Quantity + Avg-Price pair. See the **Download template** "
                     "tab for a working example."
                 )
 
