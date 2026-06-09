@@ -289,6 +289,19 @@ class RecommendationEngine:
         df["Entry_Low"] = close * (1.0 - 0.005)
         df["Entry_High"] = close * (1.0 + 0.005)
 
+        # Recompute trade levels from ATR for EVERY ranked candidate. The
+        # Stop/Target columns carried in from add_entry_exit_levels are only
+        # populated on actual BUY/SELL bars, so a Hold-ranked watchlist name
+        # would otherwise show Stop = T1 = T2 = Close and R/R 0.0 (looks
+        # broken). Standard 2×ATR stop, 2×/4×ATR targets → a clean 1:2 reward.
+        if "ATR_14" in df.columns:
+            atr = df["ATR_14"].fillna(0.0)
+            df["Stop_Loss"] = close - 2.0 * atr
+            df["Target_1"] = close + 2.0 * atr
+            df["Target_2"] = close + 4.0 * atr
+            risk = (close - df["Stop_Loss"]).abs().replace(0, np.nan)
+            df["Risk_Reward"] = ((df["Target_2"] - close).abs() / risk).fillna(0.0)
+
         cols = [
             "ticker", "Type", "Score", "Signal_Strength", "Confidence",
             "Close", "Entry_Low", "Entry_High",

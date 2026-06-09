@@ -2695,14 +2695,14 @@ def page_recommendations(pipe: dict) -> None:
             return
         for i, row in df.iterrows():
             rr = float(row.get("Risk_Reward", 0))
+            conf = float(row["Confidence"]) * 100
             with st.container(border=True):
-                top = st.columns([0.30, 0.20, 0.20, 0.30])
-                top[0].markdown(f"### #{i+1} · **{row['ticker']}**")
-                top[1].metric("Score", f"{row['Score']:.2f}",
-                              delta=str(row["Signal_Strength"]))
-                top[2].metric("Confidence", f"{float(row['Confidence'])*100:.0f}%")
-                top[3].metric("Holding", str(row["Holding_Period"]))
-
+                # Compact one-line header — ticker + verdict folded together
+                # (was a tall 3-metric row) so each card takes less height.
+                st.markdown(
+                    f"**#{i+1} · {row['ticker']}**  ·  {row['Signal_Strength']}  "
+                    f"·  {conf:.0f}% confidence  ·  hold {row['Holding_Period']}"
+                )
                 lvl = st.columns(5)
                 metric_card(lvl[0], "Entry zone",
                             f"{format_inr_price(row['Entry_Low'], 1)}–"
