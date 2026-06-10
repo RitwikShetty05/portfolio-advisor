@@ -13,8 +13,11 @@ opening and closing positions as signals fire, while respecting:
     * Transaction cost : 0.1% per trade (NSE STT + brokerage + SEBI)
     * Position cap     : 10% of NAV per stock
     * Max positions    : 8 concurrent
-    * Stop-loss        : 2× ATR — closed at next bar's open intraday
-                         (a realistic execution assumption)
+    * Stop-loss        : 2× ATR — when a bar's intraday Low touches the
+                         stop, the position is closed that bar AT the stop
+                         price (the standard backtest fill assumption; it
+                         ignores gap-down slippage below the stop, see
+                         _check_stops)
 
 Why event-driven (not vectorised)
 ---------------------------------
@@ -283,8 +286,12 @@ class Backtester:
             if pd.isna(low):
                 continue
             if low <= pos.stop_loss:
-                # Realistic fill assumption: filled at the stop level (worst
-                # case for a stop-loss order, conservative for backtests).
+                # Fill assumption: executed AT the stop level. This is the
+                # standard backtest convention — exact for any day that merely
+                # trades through the stop, mildly optimistic on overnight
+                # gap-downs (a real stop-market order would fill at the open,
+                # below the stop). With large-cap NSE names and a 2×ATR buffer
+                # the gap error is second-order; flagged here for honesty.
                 self._close_position(state, ticker, date, pos.stop_loss, "stop_loss")
 
     def _check_sells(self, state: _State, signaled: Dict[str, pd.DataFrame],

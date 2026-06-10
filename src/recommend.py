@@ -330,7 +330,21 @@ class RecommendationEngine:
             triggers: list[str] = []
             severity = None
             action = None
-            stop = float(r.get("Stop_Loss", r["Close"] * 0.95))
+            # Protective stop for an EXISTING LONG holding: 2×ATR(14) below
+            # the latest close — the same Turtle-style multiple the entry
+            # levels use elsewhere.
+            #
+            # Why we don't read the snapshot's Stop_Loss column here:
+            # ``add_entry_exit_levels`` only computes meaningful levels on
+            # signal bars. On a Hold bar Stop_Loss degenerates to the close
+            # itself ("your stop is the current price" — useless), and on a
+            # SELL bar the geometry is the SHORT side (stop *above* price),
+            # which is the wrong direction for protecting a long position
+            # the user already owns. Same bug class as the degenerate trade
+            # levels fixed in _format_output — this is the Exit-tab twin.
+            close_px = float(r["Close"])
+            atr = float(r.get("ATR_14", 0.0) or 0.0)
+            stop = close_px - 2.0 * atr if atr > 0 else close_px * 0.95
 
             # 1) Active SELL signal
             if r.get("Signal", 0) == -1 and float(r.get("Confidence", 0.0)) > 0.40:
