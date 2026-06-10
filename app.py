@@ -611,13 +611,29 @@ def sidebar_controls() -> dict:
     with st.sidebar.expander("⚙️ Pipeline settings", expanded=False):
         regime_method = st.selectbox(
             "Regime method", options=["hmm", "kmeans", "ma_crossover"], index=0,
-            help="HMM is the production default (best bear-zone recall).",
+            help="How the app decides whether the market is in a rising "
+                 "(BULL), falling (BEAR) or range-bound (SIDEWAYS) phase. "
+                 "**hmm** is a statistical model (Hidden Markov Model) that "
+                 "reads daily returns + volatility — it's the default because "
+                 "it spots downturns earliest. The other two are simpler "
+                 "baselines kept for comparison.",
         )
-        start = st.date_input("Start date", value=date.fromisoformat(C.START_DATE))
-        end = st.date_input("End date", value=date.fromisoformat(C.END_DATE))
+        start = st.date_input(
+            "Start date", value=date.fromisoformat(C.START_DATE),
+            help="First day of price history to analyse. More history = "
+                 "better statistics (covers more market cycles) but a slower "
+                 "first load.",
+        )
+        end = st.date_input(
+            "End date", value=date.fromisoformat(C.END_DATE),
+            help="Last day of price history. Defaults to today so the "
+                 "analysis always includes the most recent trading day.",
+        )
         selected_universe = st.multiselect(
             "Universe", options=C.UNIVERSE, default=C.UNIVERSE,
-            help="Trim the universe for faster runs.",
+            help="The basket of stocks the app analyses. Remove some for "
+                 "faster runs — anything you upload or search for is fetched "
+                 "on top of this list automatically.",
         )
     if not selected_universe:
         st.sidebar.error("Select at least one ticker.")
@@ -1156,6 +1172,10 @@ def holdings_uploader(key_prefix: str,
         raw = st.text_area(
             "One `TICKER, AMOUNT` per line",
             value=default_text, height=200, key=f"{key_prefix}_textarea",
+            help="Quick manual entry — one holding per line, e.g. "
+                 "`RELIANCE.NS, 30000`. The amount is the position's current "
+                 "value in ₹ (what it's worth today, not what you paid). "
+                 "Typing here overrides any uploaded file.",
         )
         for line in raw.splitlines():
             line = line.strip()
@@ -1188,12 +1208,17 @@ def holdings_uploader(key_prefix: str,
             data=tmpl_compact.to_csv(index=False),
             file_name="holdings_template_compact.csv", mime="text/csv",
             use_container_width=True, key=f"{key_prefix}_tmpl_compact",
+            help="Simplest format: stock symbol + how many ₹ that position "
+                 "is worth today. Use when you don't track share counts.",
         )
         c2.download_button(
             "⬇️ Detailed (Ticker + Qty + Avg Price)",
             data=tmpl_detailed.to_csv(index=False),
             file_name="holdings_template_detailed.csv", mime="text/csv",
             use_container_width=True, key=f"{key_prefix}_tmpl_detailed",
+            help="Like a broker statement: symbol + number of shares + "
+                 "average price you paid. Lets the analyzer compute exact "
+                 "values per holding.",
         )
 
     # Source of truth, in priority order:
@@ -1255,7 +1280,12 @@ def page_dashboard(pipe: dict) -> None:
             label = f"NIFTY 50 close · {_fmt_as_of(nifty_quote)}"
         metric_card(c1, label,
                     format_inr_price(nifty_quote['last_price'], precision=0),
-                    delta=delta)
+                    delta=delta,
+                    help_text="NIFTY 50 = the index of India's 50 largest "
+                              "listed companies — the stock market's headline "
+                              "scoreboard. LTP = last traded price (free "
+                              "feed, ~15–20 min behind the exchange). The "
+                              "small number below is today's change.")
     else:
         metric_card(c1, "NIFTY 50 (last close)",
                     format_inr_price(latest['Close'], precision=0),
@@ -1263,25 +1293,32 @@ def page_dashboard(pipe: dict) -> None:
     if "Regime_Prob_Bull" in bench_labelled.columns:
         metric_card(c2, "P(Bull) [HMM]",
                     f"{float(latest['Regime_Prob_Bull'])*100:.1f}%",
-                    help_text="Hidden-Markov-Model posterior probability that "
-                              "NIFTY 50 is in its BULL state on the latest "
-                              "bar. The remainder to 100% sits in the "
-                              "SIDEWAYS state.")
+                    help_text="How confident the model is (0–100%) that the "
+                              "market is currently in a RISING phase. Comes "
+                              "from a Hidden Markov Model — a statistical "
+                              "model that reads daily returns and volatility. "
+                              "Bull + Bear + Sideways always sum to 100%.")
         metric_card(c3, "P(Bear) [HMM]",
                     f"{float(latest['Regime_Prob_Bear'])*100:.1f}%",
-                    help_text="Posterior probability of the BEAR state — the "
-                              "strategy's main risk-off trigger (smaller "
-                              "positions, harder buy gate).")
+                    help_text="Model confidence that the market is in a "
+                              "FALLING phase. This is the strategy's main "
+                              "'play defence' trigger — high P(Bear) means "
+                              "smaller positions and a much stricter bar for "
+                              "new buys.")
     metric_card(c4, "Universe tickers", f"{len(signaled)}",
                 help_text="Stocks loaded into this run's pipeline. Trim or "
                           "extend it under ⚙️ Pipeline settings in the sidebar.")
 
     # --- Ticker tape (label adapts to market state) ---
+    _tape_help = ("One card per stock in the loaded universe: latest price "
+                  "and today's move (teal = up, red = down). '● Live' pulses "
+                  "while the exchange is open; quotes come from a free feed "
+                  "that runs ~15–20 min behind.")
     if is_market_open():
-        st.subheader("Universe — live (delayed) quotes")
+        st.subheader("Universe — live (delayed) quotes", help=_tape_help)
         st.caption("⟳ Auto-refreshes every 60 s while NSE is in session.")
     else:
-        st.subheader("Universe — last close")
+        st.subheader("Universe — last close", help=_tape_help)
     universe_tickers = tuple(sorted(signaled.keys()))[:15]   # cap to keep it readable
     # Same fragment treatment as the top status bar: while the market is
     # open the 15-card tape refreshes itself every 60s (one batched quote
@@ -1295,7 +1332,16 @@ def page_dashboard(pipe: dict) -> None:
         render_ticker_tape(universe_tickers, cols_per_row=5)
 
     # --- Top BUY signals ---
-    st.subheader("Top BUY signals (latest bar)")
+    st.subheader(
+        "Top BUY signals (latest bar)",
+        help="Stocks whose most recent trading day fired a BUY signal, "
+             "ranked by the model's confidence. Columns: **Stop** = exit "
+             "price if the trade goes wrong · **Target 1/2** = profit-taking "
+             "levels · **R/R** = potential reward ÷ potential risk (2.0 "
+             "means you stand to make twice what you'd lose). Empty table "
+             "= the model sees nothing worth buying today — that restraint "
+             "is a feature.",
+    )
     rows = []
     for t, df in signaled.items():
         last = df.dropna(subset=["Signal"]).tail(1)
@@ -1329,7 +1375,12 @@ def page_dashboard(pipe: dict) -> None:
         st.info("No active BUY signals on the latest bar.")
 
     # --- Fixed signal heat-map ---
-    st.subheader("Signal heat-map — last 30 trading days")
+    st.subheader(
+        "Signal heat-map — last 30 trading days",
+        help="A calendar of the model's daily verdict for every stock — "
+             "read left (older) to right (today). Mostly grey is normal: "
+             "the model only acts when several independent checks agree.",
+    )
     st.caption(
         "Each row is a ticker, each cell is a day.  "
         "🟢 = Buy  ·  ⚪ Grey = Hold  ·  🔴 = Sell  ·  "
@@ -1345,6 +1396,12 @@ def page_dashboard(pipe: dict) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("📋 Data-quality report", expanded=False):
+        st.caption(
+            "One row per stock the loader fetched: how many trading days of "
+            "history came back, the % of days missing, and whether it passed "
+            "the quality gate (needs ≥100 days and <12% gaps). A stock that "
+            "fails here is excluded rather than analysed on bad data."
+        )
         st.dataframe(pipe["quality"], use_container_width=True, hide_index=True)
 
 
@@ -1472,7 +1529,12 @@ def page_stock_analyzer(pipe: dict) -> None:
     ticker: str | None = None
 
     if mode == "Universe":
-        ticker = st.selectbox("Ticker", options=sorted(signaled.keys()))
+        ticker = st.selectbox(
+            "Ticker", options=sorted(signaled.keys()),
+            help="Pick one of the pre-loaded universe stocks to chart. "
+                 ".NS just means it trades on the NSE (National Stock "
+                 "Exchange of India).",
+        )
 
     elif mode.startswith("🔎"):
         # Pre-formatted "TICKER — Company Name" options, alphabetised by name.
@@ -1504,6 +1566,9 @@ def page_stock_analyzer(pipe: dict) -> None:
             "Symbol (no need to add .NS)", value="",
             placeholder="e.g. BAJAJ-AUTO, MOTHERSON, IRCTC",
             key="stock_picker_custom",
+            help="Type any NSE trading symbol — the app adds the .NS suffix, "
+                 "downloads its full price history on the fly and runs the "
+                 "complete indicator + signal pipeline on it.",
         )
         ticker = normalise_ticker(raw)
         if not ticker:
@@ -1543,14 +1608,35 @@ def page_stock_analyzer(pipe: dict) -> None:
             label = "LTP (delayed)"
         else:
             label = f"Close · {_fmt_as_of(live)}"
-        metric_card(c1, label, format_inr_price(live['last_price']), delta=delta)
+        metric_card(c1, label, format_inr_price(live['last_price']), delta=delta,
+                    help_text="Last traded price from a free feed that runs "
+                              "~15–20 min behind the exchange. The small "
+                              "number is the change vs the previous close.")
     else:
         metric_card(c1, "Last close (EOD)", format_inr_price(last['Close']),
                     help_text="Price quote unavailable; showing latest EOD close.")
-    metric_card(c2, "Signal", str(last.get("Signal_Strength", "-")))
-    metric_card(c3, "Confidence", f"{float(last.get('Confidence', 0))*100:.0f}%")
-    metric_card(c4, "Regime", str(last.get("Regime_Label", "-")))
-    metric_card(c5, "RSI 14", f"{float(last.get('RSI_14', np.nan)):.1f}")
+    metric_card(c2, "Signal", str(last.get("Signal_Strength", "-")),
+                help_text="The model's verdict on the latest trading day: "
+                          "Strong Buy / Buy / Hold / Sell / Strong Sell. It's "
+                          "a weighted vote of four independent 'lenses' — "
+                          "trend, momentum, mean-reversion and volume — "
+                          "filtered by the market phase. Hold simply means "
+                          "no strong evidence either way.")
+    metric_card(c3, "Confidence", f"{float(last.get('Confidence', 0))*100:.0f}%",
+                help_text="How strongly the four lenses agree (0–100%). High "
+                          "= they all point the same way; low = mixed "
+                          "evidence. Bigger conviction also earns a bigger "
+                          "position size in the backtest.")
+    metric_card(c4, "Regime", str(last.get("Regime_Label", "-")),
+                help_text="The phase THIS stock is judged to be in: BULL "
+                          "(uptrend), BEAR (downtrend) or SIDEWAYS (range-"
+                          "bound). The system buys easily in BULL, demands "
+                          "much stronger proof in BEAR.")
+    metric_card(c5, "RSI 14", f"{float(last.get('RSI_14', np.nan)):.1f}",
+                help_text="Relative Strength Index — a 0–100 momentum "
+                          "thermometer over the last 14 days. Above 70 ≈ "
+                          "overheated (overbought), below 30 ≈ beaten down "
+                          "(oversold), ~50 = neutral.")
 
     # Day's range strip — only when we have a fresh quote with day high/low set.
     if live and not live.get("stale") and live.get("day_high") and live.get("day_low"):
@@ -1719,14 +1805,34 @@ def page_stock_analyzer(pipe: dict) -> None:
     sig = int(last.get("Signal", 0))
     if sig != 0:
         verb = "BUY" if sig > 0 else "SELL"
-        st.subheader(f"Trade plan (latest {verb})")
+        st.subheader(
+            f"Trade plan (latest {verb})",
+            help="A ready-made if/then plan for the active signal. All "
+                 "levels scale with ATR — the stock's Average True Range, "
+                 "i.e. how many rupees it typically moves in a day — so "
+                 "jumpy stocks get wider stops than calm ones.",
+        )
         cols = st.columns(4)
-        metric_card(cols[0], "Entry", format_inr_price(last['Entry_Price']))
-        metric_card(cols[1], "Stop-loss", format_inr_price(last['Stop_Loss']))
-        metric_card(cols[2], "Target 1", format_inr_price(last['Target_1']))
+        metric_card(cols[0], "Entry", format_inr_price(last['Entry_Price']),
+                    help_text="The price the signal fired at — the reference "
+                              "point the stop and targets are measured from.")
+        metric_card(cols[1], "Stop-loss", format_inr_price(last['Stop_Loss']),
+                    help_text="The 'I was wrong' exit: if price reaches this "
+                              "level, close the trade and cap the loss. Set "
+                              "2× ATR away so normal daily noise doesn't "
+                              "knock you out of a good position.")
+        metric_card(cols[2], "Target 1", format_inr_price(last['Target_1']),
+                    help_text="First profit level at 2× ATR (same distance "
+                              "as the stop → a 1:1 trade). A common play: "
+                              "sell half here and move the stop to entry so "
+                              "the rest rides risk-free.")
         metric_card(cols[3],
                     f"Target 2 (R/R {float(last['Risk_Reward']):.1f})",
-                    format_inr_price(last['Target_2']))
+                    format_inr_price(last['Target_2']),
+                    help_text="Stretch target at 4× ATR. R/R = reward-to-"
+                              "risk ratio: 2.0 means the distance to this "
+                              "target is twice the distance to the stop — "
+                              "you stand to make ₹2 for every ₹1 you risk.")
 
 
 # ---------------------------------------------------------------------------
@@ -1790,7 +1896,11 @@ def page_portfolio_analyzer(pipe: dict) -> None:
             st.error("None of your holdings loaded. Cannot analyze.")
             return
 
-    if not st.button("🔍 Analyze portfolio", type="primary"):
+    if not st.button("🔍 Analyze portfolio", type="primary",
+                     help="Runs the full risk work-up on your holdings: "
+                          "returns, swing size, diversification score, "
+                          "correlations, sector mix, worst-day estimates "
+                          "(VaR) and automatic structural warnings."):
         return
 
     pa = PortfolioAnalyzer(holdings)
@@ -1861,42 +1971,80 @@ def page_portfolio_analyzer(pipe: dict) -> None:
         metric_card(c2, "Live value", "—",
                     help_text="Live quotes unavailable right now.")
     metric_card(c3, "Ann. return", format_pct(m['ann_return']),
-                help_text="Weight-averaged annualised return over the common "
-                          "history window shared by all holdings.")
+                help_text="What this mix of holdings earned per year on "
+                          "average, measured over the window where ALL of "
+                          "them have price history. It describes the past — "
+                          "it is not a forecast.")
     metric_card(c4, "Ann. volatility", format_pct(m['ann_vol'], signed=False),
-                help_text="Markowitz σ_p = √(wᵀ Σ w)")
+                help_text="How much the portfolio's value swings in a "
+                          "typical year — higher = bumpier ride. Computed "
+                          "the textbook (Markowitz) way: σ_p = √(wᵀ Σ w), "
+                          "which credits you when holdings don't move in "
+                          "sync.")
     metric_card(c5, "Sharpe", f"{m['sharpe']:.2f}",
-                help_text="Excess return over the 6.5% risk-free rate per "
-                          "unit of volatility. Above ~1 is good for a "
-                          "buy-and-hold equity book.")
+                help_text="Return earned per unit of risk taken, after "
+                          "subtracting what a safe ~6.5% deposit would have "
+                          "paid anyway. Rule of thumb: below 0 = the risk "
+                          "wasn't paid for · 0–1 = OK · above 1 = good.")
 
     c1, c2, c3, c4 = st.columns(4)
     metric_card(c1, "Diversification", f"{d['score']:.0f} / 100",
                 delta=d["label"],
-                help_text="Composite: 50% mean pairwise correlation + 25% "
-                          "sector entropy + 25% effective-N of weights (1/HHI).")
+                help_text="How well your eggs sit in different baskets, "
+                          "0–100. Blends three checks: do the holdings move "
+                          "independently (50%), are sectors spread out "
+                          "(25%), and is the money split across enough "
+                          "names rather than one giant position (25%).")
     metric_card(c2, "Mean correlation", f"{d['mean_pairwise_correlation']:.2f}",
-                help_text="Average pairwise correlation of daily returns — "
-                          "lower means the holdings hedge each other better.")
+                help_text="How similarly your holdings move on average: 0 = "
+                          "independent, 1 = perfect lockstep. Lower is "
+                          "better — lockstep holdings all fall on the same "
+                          "bad day, so they diversify nothing.")
     metric_card(c3, "VaR 95% (1d)", format_inr(abs(v['var_95_inr'])),
-                help_text=f"{v['var_95_pct']*100:.2f}% historical — the loss "
-                          "exceeded on the worst 5% of days.")
+                help_text=f"Value-at-Risk: on 19 days out of 20 your one-day "
+                          f"loss should stay UNDER this amount "
+                          f"({abs(v['var_95_pct'])*100:.2f}% of the "
+                          f"portfolio). Roughly one day in twenty will be "
+                          f"worse — see CVaR for how much worse.")
     metric_card(c4, "CVaR 95%", format_inr(abs(v['cvar_95_inr'])),
-                help_text="Expected Shortfall — the AVERAGE loss across those "
-                          "worst-5% days (what a bad day actually costs).")
+                help_text="Conditional VaR / Expected Shortfall: when one of "
+                          "those 1-in-20 bad days DOES hit, this is the "
+                          "average loss across them — what a genuinely bad "
+                          "day actually costs.")
 
     # ------------------ Sector treemap + correlation heatmap ------------------
     left, right = st.columns([0.55, 0.45])
     with left:
-        st.subheader("Sector exposure")
+        st.subheader(
+            "Sector exposure",
+            help="Each box = one holding; box SIZE = share of your money in "
+                 "it, grouped by sector; box COLOUR = its yearly return "
+                 "(teal = up, red = down). One huge box or one dominant "
+                 "sector block = concentration risk at a glance.",
+        )
         tm = sector_treemap(pa.sector_exposure, pa.stock_metrics)
         st.plotly_chart(tm, use_container_width=True)
     with right:
-        st.subheader("Correlation heat-map")
+        st.subheader(
+            "Correlation heat-map",
+            help="ρ (rho) scores how similarly two holdings move, from −1 "
+                 "(perfect opposites) through 0 (unrelated) to +1 (perfect "
+                 "lockstep). Deep-red pairs are near-duplicates of each "
+                 "other — they double your exposure, not your "
+                 "diversification.",
+        )
         st.plotly_chart(correlation_heatmap(pa.corr), use_container_width=True)
 
     # ------------------ Per-stock tables in expanders ------------------
     with st.expander("📊 Per-stock breakdown", expanded=True):
+        st.caption(
+            "How to read this: **weight** = share of your money · **value** "
+            "= ₹ in that holding · **ann_return / ann_vol** = its yearly "
+            "return and swing size over its full history · **sharpe** = "
+            "return per unit of risk (>1 is good) · **max_drawdown** = the "
+            "worst peak-to-trough fall it has ever had — the pain you'd "
+            "have sat through holding it."
+        )
         sm = pa.stock_metrics.copy()
         st.dataframe(
             sm.style.format({
@@ -1911,6 +2059,13 @@ def page_portfolio_analyzer(pipe: dict) -> None:
         )
 
     with st.expander("⚖️ Risk contributions", expanded=False):
+        st.caption(
+            "Which holdings actually drive your portfolio's swings. A stock "
+            "can be 10% of your money but 25% of your risk if it's volatile "
+            "and moves with everything else. **risk_contribution_pct** = its "
+            "share of total portfolio risk; **risk_vs_weight** compares that "
+            "to its share of your money."
+        )
         rc = pa.risk_contrib.copy()
         st.dataframe(
             rc.style.format({
@@ -1920,12 +2075,20 @@ def page_portfolio_analyzer(pipe: dict) -> None:
             use_container_width=True, hide_index=True,
         )
         st.caption(
-            "Risk-vs-weight > 1.5 → 'risk hog' — a position contributing more "
-            "to portfolio volatility than its cash weight."
+            "Risk-vs-weight > 1.5× → a **risk hog**: the position punches "
+            "well above its weight in how much it shakes your portfolio."
         )
 
     # ------------------ Warnings ------------------
-    st.subheader("Warnings")
+    st.subheader(
+        "Warnings",
+        help="Automatic structural health checks: any single stock above "
+             "30% of the book · pairs that move in near-lockstep "
+             "(correlation > 0.75 — hidden duplication) · 'risk hogs' "
+             "contributing far more risk than their size · any sector above "
+             "50% · holdings too new to have a meaningful track record. "
+             "🟥 = high severity, 🟧 = worth a look.",
+    )
     if not pa.warnings:
         st.success("✓ No structural warnings — the portfolio looks healthy.")
     else:
@@ -2087,13 +2250,30 @@ def page_backtest_lab(pipe: dict) -> None:
     # ---- Configuration row ----
     c1, c2, c3 = st.columns(3)
     capital = c1.number_input("Initial capital (₹)", value=int(C.INITIAL_CAPITAL),
-                              step=10_000, min_value=10_000)
+                              step=10_000, min_value=10_000,
+                              help="The starting cash the simulation invests. "
+                                   "₹ results scale with it; the quality "
+                                   "metrics (CAGR, Sharpe, drawdown) don't "
+                                   "change.")
     txn = c2.number_input("Transaction cost (per side)", value=float(C.TRANSACTION_COST),
-                          step=0.0001, format="%.4f")
+                          step=0.0001, format="%.4f",
+                          help="Friction charged on EVERY buy and every sell, "
+                               "as a fraction: 0.0010 = 0.1%. Covers "
+                               "brokerage, taxes (STT) and slippage. "
+                               "Backtests that skip this always look better "
+                               "than reality.")
     max_pos = c3.number_input("Max open positions", value=int(C.MAX_OPEN_POSITIONS),
-                              step=1, min_value=1, max_value=20)
+                              step=1, min_value=1, max_value=20,
+                              help="How many stocks the simulator may hold at "
+                                   "the same time. More slots = more "
+                                   "diversified but each idea gets less "
+                                   "money; fewer = concentrated bets.")
 
-    if st.button("▶️ Run backtest", type="primary"):
+    if st.button("▶️ Run backtest", type="primary",
+                 help="Replays history one trading day at a time: signals "
+                      "fire, positions open only if cash and slots allow, "
+                      "stops trigger off real intraday lows — no peeking at "
+                      "tomorrow's prices."):
         bt = Backtester(initial_capital=capital, transaction_cost=txn,
                         max_positions=int(max_pos))
         with st.spinner("Running event-driven simulation…"):
@@ -2194,30 +2374,71 @@ def _render_performance_tab(bt: Backtester, benchmark: pd.DataFrame) -> None:
                               "defensive strategy in a bull tape — the win "
                               "is ⅓ the drawdown at ~⅓ the beta.")
 
-    st.subheader("Equity curve vs NIFTY 50")
+    st.subheader(
+        "Equity curve vs NIFTY 50",
+        help="Growth of ₹1: the strategy (navy) vs simply buying and "
+             "holding the NIFTY 50 index (dashed grey). The red-shaded band "
+             "marks the deepest loss stretch — from the peak before the "
+             "worst fall until the day it was recovered. A defensive "
+             "strategy may end lower than the index but with a far "
+             "shallower worst stretch.",
+    )
     st.plotly_chart(equity_vs_benchmark_chart(bt, benchmark),
                     use_container_width=True)
 
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Drawdown")
+        st.subheader(
+            "Drawdown",
+            help="How far below its own record high the portfolio sat at "
+                 "every moment. 0% = at a fresh high; the deepest dip is "
+                 "the max drawdown — the most pain anyone holding this "
+                 "strategy would ever have felt.",
+        )
         st.plotly_chart(drawdown_chart(bt), use_container_width=True)
     with c2:
-        st.subheader("Rolling 6-month Sharpe")
+        st.subheader(
+            "Rolling 6-month Sharpe",
+            help="Risk-adjusted performance measured over a sliding "
+                 "6-month window — shows WHEN the strategy was hot or cold "
+                 "instead of one averaged number. Persistent decline = the "
+                 "edge may be fading; oscillation around a positive level "
+                 "= normal.",
+        )
         st.plotly_chart(rolling_sharpe_chart(bt), use_container_width=True)
 
-    st.subheader("Monthly returns heat-map")
+    st.subheader(
+        "Monthly returns heat-map",
+        help="Each cell = one calendar month's profit or loss in %. Teal = "
+             "up month, red = down. Scan a row to see how a year unfolded; "
+             "scan a column for seasonal patterns. Lots of pale cells = the "
+             "strategy spends much of its time flat in cash — by design.",
+    )
     mret = monthly_returns_heatmap(bt.daily_returns)
     if mret is not None:
         st.plotly_chart(mret, use_container_width=True)
 
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Daily returns distribution")
+        st.subheader(
+            "Daily returns distribution",
+            help="Histogram of every single day's profit/loss in %. μ = the "
+                 "average day; dotted lines = ±1 typical swing (standard "
+                 "deviation). What to look for: is the left tail (rare "
+                 "nasty days) short? Defensive strategies aim to clip that "
+                 "tail.",
+        )
         st.plotly_chart(returns_histogram(bt.daily_returns),
                         use_container_width=True)
     with c2:
-        st.subheader("Per-trade P&L")
+        st.subheader(
+            "Per-trade P&L",
+            help="One bar per completed trade, in time order. The classic "
+                 "trend-following signature: many small red losses (stopped "
+                 "out early) paid for by fewer, much larger teal wins. "
+                 "Hover a bar for the stock, holding period and exit "
+                 "reason.",
+        )
         tl = bt.trade_log
         if tl is None or tl.empty:
             st.info("No trades to plot.")
@@ -2225,6 +2446,12 @@ def _render_performance_tab(bt: Backtester, benchmark: pd.DataFrame) -> None:
             st.plotly_chart(trade_pnl_chart(tl), use_container_width=True)
 
     with st.expander("📒 Trade log (full table)", expanded=False):
+        st.caption(
+            "Every round-trip the simulator took: entry/exit dates and "
+            "prices, position size, ₹ and % result, and **exit_reason** — "
+            "`stop_loss` (safety net hit), `signal_sell` (model turned "
+            "negative) or `end_of_data` (still open when the test ended)."
+        )
         tl = bt.trade_log
         if tl is None or tl.empty:
             st.info("No trades executed.")
@@ -2279,6 +2506,10 @@ def _render_significance_tab(bt: Backtester, benchmark: pd.DataFrame) -> None:
         n_boot = st.select_slider(
             "Bootstrap resamples", options=[1_000, 2_000, 5_000, 10_000],
             value=5_000,
+            help="How many times we reshuffle the daily returns (sampling "
+                 "with replacement) and recompute the Sharpe ratio. The "
+                 "spread of those re-computations becomes the confidence "
+                 "band — more resamples = smoother estimate, slower run.",
         )
     with c2:
         st.caption(
@@ -2288,7 +2519,11 @@ def _render_significance_tab(bt: Backtester, benchmark: pd.DataFrame) -> None:
             "Alpha t-stat uses Newey-West HAC standard errors."
         )
 
-    if st.button("Run significance tests", key="sig_run"):
+    if st.button("Run significance tests", key="sig_run",
+                 help="Answers the question every backtest must face: is "
+                      "this Sharpe genuine skill, or luck amplified by "
+                      "trying lots of configurations until one looked "
+                      "good?"):
         rf_daily = (1 + C.RISK_FREE_RATE) ** (1 / C.TRADING_DAYS) - 1
         bench_rets = (benchmark["Close"]
                        .reindex(bt.equity_curve.index).ffill().pct_change())
@@ -2315,28 +2550,56 @@ def _render_significance_tab(bt: Backtester, benchmark: pd.DataFrame) -> None:
     # ---- Top-line metrics row ----
     c1, c2, c3, c4 = st.columns(4)
     metric_card(c1, "Observed Sharpe", f"{boot.point_estimate:.2f}",
-                delta=f"95% CI [{boot.ci_low:.2f}, {boot.ci_high:.2f}]")
+                delta=f"95% CI [{boot.ci_low:.2f}, {boot.ci_high:.2f}]",
+                help_text="The headline risk-adjusted score, now with an "
+                          "honesty band: we're 95% confident the true value "
+                          "lies inside the CI. If that band includes 0, the "
+                          "'edge' could plausibly be nothing at all.")
     psr_pct = psr.psr * 100
     metric_card(c2, "P(SR > 0)  [PSR]", f"{psr_pct:.1f}%",
                 delta="✓ strong" if psr_pct >= 95
-                else ("borderline" if psr_pct >= 80 else "weak"))
+                else ("borderline" if psr_pct >= 80 else "weak"),
+                help_text="Probabilistic Sharpe Ratio: the probability the "
+                          "TRUE Sharpe is above zero, after accounting for "
+                          "how lumpy and fat-tailed the returns are (normal "
+                          "stats understate uncertainty for strategies). "
+                          "95%+ = strong evidence of a real edge.")
     dsr_pct = dsr.dsr * 100
     metric_card(c3, f"P(SR > E[max | N={dsr.n_trials}])  [DSR]",
                 f"{dsr_pct:.1f}%",
                 delta="✓ survives" if dsr_pct >= 95
-                else ("borderline" if dsr_pct >= 80 else "fails"))
+                else ("borderline" if dsr_pct >= 80 else "fails"),
+                help_text="Deflated Sharpe Ratio — the cherry-picking "
+                          "penalty. If you try N strategies, the best one "
+                          "looks good by pure luck; DSR asks whether the "
+                          "observed Sharpe still beats what luck alone "
+                          "would hand the winner of N tries.")
     if alpha is not None:
         sig_stars = "***" if alpha.significant_1pct else (
             "**" if alpha.significant_5pct else "n.s.")
         metric_card(c4, "Alpha t-stat",
                     f"{alpha.t_stat:+.2f} {sig_stars}",
-                    delta=f"p = {alpha.p_value:.3f}")
+                    delta=f"p = {alpha.p_value:.3f}",
+                    help_text="Statistical significance of the "
+                              "outperformance vs NIFTY. Rule of thumb: |t| "
+                              "≥ 2 means roughly 95% confidence it's real; "
+                              "'n.s.' = not significant, i.e. statistically "
+                              "indistinguishable from luck. Stars: ** = 5% "
+                              "level, *** = 1% level.")
     else:
         metric_card(c4, "Alpha t-stat", "—",
                     delta="benchmark not available")
 
     # ---- Bootstrap distribution histogram ----
-    st.subheader("Bootstrap distribution of annualised Sharpe")
+    st.subheader(
+        "Bootstrap distribution of annualised Sharpe",
+        help="Each draw reshuffles the strategy's daily returns and "
+             "recomputes the Sharpe — the spread of outcomes IS the "
+             "uncertainty in the headline number. Amber = the observed "
+             "value · red dotted = the 95% confidence band · grey dashed = "
+             "the best Sharpe you'd EXPECT from pure luck after N tries "
+             "(the bar the strategy must clear).",
+    )
     fig = go.Figure(go.Histogram(
         x=boot.samples, nbinsx=50,
         marker_color=THEME["primary"], marker_line_color="white",
@@ -2428,13 +2691,32 @@ def _render_walkforward_tab(pipe: dict, benchmark: pd.DataFrame) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     train_years = c1.number_input("Train window (years)", min_value=1.0,
-                                   max_value=10.0, value=3.0, step=0.5)
+                                   max_value=10.0, value=3.0, step=0.5,
+                                   help="How many years of history the model "
+                                        "LEARNS from before being graded. "
+                                        "Like studying past papers before an "
+                                        "exam it hasn't seen.")
     test_months = c2.number_input("Test window (months)", min_value=1,
-                                   max_value=24, value=6, step=1)
+                                   max_value=24, value=6, step=1,
+                                   help="Length of the 'exam': the freshly "
+                                        "trained model trades this stretch "
+                                        "of data it has NEVER seen, and "
+                                        "only these results count as "
+                                        "out-of-sample.")
     step_months = c3.number_input("Step (months)", min_value=1, max_value=24,
-                                   value=6, step=1)
+                                   value=6, step=1,
+                                   help="How far the whole train→test pair "
+                                        "slides forward between rounds. "
+                                        "Step = test length means the test "
+                                        "windows tile history with no gaps "
+                                        "or overlap.")
     anchored = c4.radio("Mode", options=["Anchored", "Rolling"],
-                        index=0, horizontal=True) == "Anchored"
+                        index=0, horizontal=True,
+                        help="Anchored = training always starts at day 1, "
+                             "so the model's memory GROWS each round. "
+                             "Rolling = a fixed-length window that slides "
+                             "along, so it forgets the oldest data — adapts "
+                             "faster, knows less.") == "Anchored"
 
     bt = st.session_state.get("bt_result")
     params = st.session_state.get("bt_params", {})
@@ -2490,7 +2772,14 @@ def _render_walkforward_tab(pipe: dict, benchmark: pd.DataFrame) -> None:
     # ---- IS vs OOS comparison row ----
     in_sample = bt.metrics if bt is not None else {}
     oos = result.oos_metrics
-    st.subheader("In-sample vs. Out-of-sample")
+    st.subheader(
+        "In-sample vs. Out-of-sample",
+        help="In-sample (IS) = performance on the data the model was built "
+             "on — always flattering, like grading a student on questions "
+             "they practised. Out-of-sample (OOS) = performance on data the "
+             "model had never seen — the honest number. Some IS→OOS drop "
+             "is normal; what matters is that OOS stays positive.",
+    )
     c1, c2, c3, c4 = st.columns(4)
 
     def _delta(o: float, i: float, pct: bool = False, inv: bool = False) -> str:
@@ -2502,24 +2791,49 @@ def _render_walkforward_tab(pipe: dict, benchmark: pd.DataFrame) -> None:
         return f"{diff:+.2f} vs IS"
 
     metric_card(c1, "Sharpe (OOS)", f"{oos.get('sharpe', 0):.2f}",
-                delta=_delta(oos.get("sharpe", 0), in_sample.get("sharpe", 0)))
+                delta=_delta(oos.get("sharpe", 0), in_sample.get("sharpe", 0)),
+                help_text="Risk-adjusted score earned ONLY on unseen data — "
+                          "the single most honest number on this page. "
+                          "Positive = the edge survived outside the "
+                          "training set.")
     metric_card(c2, "CAGR (OOS)", f"{oos.get('cagr', 0)*100:.2f}%",
                 delta=_delta(oos.get("cagr", 0), in_sample.get("cagr", 0),
-                              pct=True))
+                              pct=True),
+                help_text="Compound yearly growth rate across all the "
+                          "stitched-together unseen test windows.")
     metric_card(c3, "Max DD (OOS)", f"{oos.get('max_drawdown', 0)*100:.2f}%",
                 delta=_delta(oos.get("max_drawdown", 0),
-                              in_sample.get("max_drawdown", 0), pct=True))
+                              in_sample.get("max_drawdown", 0), pct=True),
+                help_text="Worst peak-to-trough fall during the "
+                          "out-of-sample run — the realistic 'how bad could "
+                          "it feel' estimate.")
     metric_card(c4, "Ann. vol (OOS)", f"{oos.get('ann_vol', 0)*100:.2f}%",
                 delta=_delta(oos.get("ann_vol", 0),
-                              in_sample.get("ann_vol", 0), pct=True))
+                              in_sample.get("ann_vol", 0), pct=True),
+                help_text="How bumpy the unseen-data ride was (annualised "
+                          "swing size). Should be in the same ballpark as "
+                          "in-sample — a big jump means the model behaves "
+                          "differently in the wild.")
 
     # ---- IS vs OOS equity comparison ----
-    st.subheader("Equity curves — In-sample vs Out-of-sample")
+    st.subheader(
+        "Equity curves — In-sample vs Out-of-sample",
+        help="All curves start at ₹1 so shapes are comparable. Navy = the "
+             "model trading data it learned from; teal = the model trading "
+             "data it had never seen (the part to trust); dashed grey = "
+             "NIFTY 50 over the same unseen stretch.",
+    )
     st.plotly_chart(_is_vs_oos_equity_chart(bt, result, benchmark),
                     use_container_width=True)
 
     # ---- Per-window summary table ----
-    st.subheader("Per-window results")
+    st.subheader(
+        "Per-window results",
+        help="One row per train→test round: when the unseen window ran, "
+             "what it returned, its Sharpe (green = positive), worst dip, "
+             "and how many trades fired. Consistency across rows beats one "
+             "spectacular row.",
+    )
     summary = result.summary.copy()
     if not summary.empty:
         st.dataframe(
@@ -2532,7 +2846,13 @@ def _render_walkforward_tab(pipe: dict, benchmark: pd.DataFrame) -> None:
         )
 
     # ---- Per-window Sharpe bar chart ----
-    st.subheader("Per-window Sharpe ratio (OOS)")
+    st.subheader(
+        "Per-window Sharpe ratio (OOS)",
+        help="Each bar = one unseen test window. Above zero = that window "
+             "made risk-adjusted money. The dashed line is the in-sample "
+             "Sharpe — bars hugging it mean little overfitting; bars far "
+             "below it mean the training flattered the model.",
+    )
     if not summary.empty:
         colors = np.where(summary["sharpe"] >= 0, THEME["bull"], THEME["bear"])
         fig = go.Figure(go.Bar(
@@ -2611,7 +2931,14 @@ def _render_factor_attribution_tab(bt: Backtester, pipe: dict) -> None:
     )
 
     # ---- Factor selection ----
-    st.subheader("Factors")
+    st.subheader(
+        "Factors",
+        help="'Factors' are broad market forces you could buy cheaply with "
+             "an index fund — the overall Market, company Size, and sector "
+             "blocks like IT or Banking. The regression asks: how much of "
+             "the strategy's return is just riding these forces, and how "
+             "much is genuinely its own (alpha)?",
+    )
     proxy_names = list(INDIAN_FACTOR_PROXIES.keys())
     c1, c2 = st.columns([0.55, 0.45])
     with c1:
@@ -2632,7 +2959,10 @@ def _render_factor_attribution_tab(bt: Backtester, pipe: dict) -> None:
         st.warning("Select at least one factor.")
         return
 
-    if st.button("🧬 Run factor regression", key="fa_run", type="primary"):
+    if st.button("🧬 Run factor regression", key="fa_run", type="primary",
+                 help="Fits: strategy returns = α + β₁·Market + β₂·Size + … "
+                      "and reports what's left over (α) with honest "
+                      "(autocorrelation-robust) error bars."):
         # Build a sub-dict of just the chosen factors.
         proxies = {k: v for k, v in INDIAN_FACTOR_PROXIES.items() if k in selected}
         cfg = st.session_state.get("last_cfg", {})
@@ -2669,15 +2999,39 @@ def _render_factor_attribution_tab(bt: Backtester, pipe: dict) -> None:
                 f"{result.alpha_annual*100:+.2f}%",
                 delta=("✓ p<0.01" if result.alpha_significant_1pct
                        else "✓ p<0.05" if result.alpha_significant_5pct
-                       else f"p={result.alpha_p:.2f} (n.s.)"))
-    metric_card(c2, "α t-stat", f"{result.alpha_t:+.2f}")
+                       else f"p={result.alpha_p:.2f} (n.s.)"),
+                help_text="Alpha: the slice of yearly return left after "
+                          "stripping out everything explainable by the "
+                          "factors — the part you could NOT replicate with "
+                          "cheap index funds. 'n.s.' = not statistically "
+                          "distinguishable from zero, reported honestly.")
+    metric_card(c2, "α t-stat", f"{result.alpha_t:+.2f}",
+                help_text="How many standard errors the alpha sits away "
+                          "from zero. |t| ≥ 2 ≈ 95% confidence it's real; "
+                          "below that, treat the alpha as noise.")
     metric_card(c3, "R²", f"{result.r_squared:.3f}",
-                delta=f"adj {result.adj_r_squared:.3f}")
+                delta=f"adj {result.adj_r_squared:.3f}",
+                help_text="Share of the strategy's day-to-day movement the "
+                          "factors explain (0–1). High R² = the strategy "
+                          "mostly IS factor exposure in disguise; low = it "
+                          "marches to its own drum.")
     metric_card(c4, "Sample size", f"{result.n_obs:,} days",
-                delta=f"HAC lags = {result.hac_lags}")
+                delta=f"HAC lags = {result.hac_lags}",
+                help_text="Number of daily observations in the regression — "
+                          "more days = tighter estimates. HAC lags = the "
+                          "Newey-West correction window that keeps the "
+                          "error bars honest when returns are "
+                          "autocorrelated.")
 
     # ---- Coefficient table ----
-    st.subheader("Coefficient table")
+    st.subheader(
+        "Coefficient table",
+        help="One row per factor. **Beta** = sensitivity (0.45 on Market "
+             "means the strategy moves ~₹45 per ₹100 the market moves) · "
+             "**t-stat / p-value** = is that exposure statistically real "
+             "(p < 0.05 = yes) · **Annual contribution** = how much of the "
+             "yearly return that exposure delivered.",
+    )
     table = FactorAttribution.to_summary_table(result).copy()
     # Render the annual contribution as a clean percentage string.
     show = table.copy()
@@ -2691,7 +3045,14 @@ def _render_factor_attribution_tab(bt: Backtester, pipe: dict) -> None:
     st.dataframe(show, use_container_width=True, hide_index=True)
 
     # ---- Attribution bar chart ----
-    st.subheader("Annualised return contribution")
+    st.subheader(
+        "Annualised return contribution",
+        help="The yearly return, split into where it actually came from: "
+             "each factor exposure (teal = added, red = cost) plus the "
+             "amber bar — pure alpha, the unexplained skill component. If "
+             "amber is small and the rest is big, the return was mostly "
+             "rented from the market, not earned.",
+    )
     contrib_rows = (
         [{"name": "α (pure alpha)", "value": result.alpha_annual}]
         + [{"name": n, "value": result.attribution_annual[n]}
@@ -2992,10 +3353,32 @@ def page_recommendations(pipe: dict) -> None:
                 )
 
     with tab_short:
+        st.caption(
+            "ℹ️ Momentum candidates meant to play out over **2–8 weeks** — "
+            "stocks already moving, with volume behind the move. Scored on "
+            "20-day momentum, signal confidence, a healthy (not overheated) "
+            "RSI, volume confirmation and the market phase. An empty list "
+            "means nothing clears the bar today — that restraint is "
+            "deliberate."
+        )
         _render_cards(result["short_term"], "short-term")
     with tab_long:
+        st.caption(
+            "ℹ️ Steadier compounders for a **3–18 month** hold: trading "
+            "above their own 200-day average (an established uptrend), low "
+            "volatility, and only suggested while the overall market phase "
+            "is bullish."
+        )
         _render_cards(result["long_term"], "long-term")
     with tab_exit:
+        st.caption(
+            "ℹ️ Watches **your uploaded holdings** for reasons to lighten "
+            "up: an active SELL signal, the stock's phase turning BEAR, an "
+            "overbought spike worth banking, or momentum rolling over. "
+            "**Suggested stop** = a protective exit placed ~2× the stock's "
+            "typical daily range below the current price. Decision-support, "
+            "not advice."
+        )
         exits = result["exits"]
         if exits.empty:
             st.success("✓ No exit alerts on your current holdings.")
@@ -3005,9 +3388,18 @@ def page_recommendations(pipe: dict) -> None:
                 with st.container(border=True):
                     cols = st.columns([0.15, 0.15, 0.25, 0.45])
                     cols[0].markdown(f"### {badge} {r['ticker']}")
-                    cols[1].metric("Action", r["action"])
+                    cols[1].metric("Action", r["action"],
+                                   help="EXIT = consider closing the "
+                                        "position; REDUCE = consider "
+                                        "trimming / taking partial profits. "
+                                        "🟥 = act soon, 🟧 = keep an eye on "
+                                        "it.")
                     cols[2].metric("Holding value",
-                                    format_inr(r['current_value']))
+                                    format_inr(r['current_value']),
+                                    help="Current ₹ value of this holding "
+                                         "from your uploaded portfolio — "
+                                         "bigger positions are listed first "
+                                         "within each urgency level.")
                     cols[3].markdown(
                         f"**Triggers:** {r['triggers']}\n\n"
                         f"**Suggested stop:** {format_inr_price(r['suggested_stop'], 1)}  "
