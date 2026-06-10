@@ -3354,20 +3354,24 @@ def page_recommendations(pipe: dict) -> None:
 
     with tab_short:
         st.caption(
-            "ℹ️ Momentum candidates meant to play out over **2–8 weeks** — "
-            "stocks already moving, with volume behind the move. Scored on "
-            "20-day momentum, signal confidence, a healthy (not overheated) "
-            "RSI, volume confirmation and the market phase. An empty list "
-            "means nothing clears the bar today — that restraint is "
-            "deliberate."
+            "ℹ️ A **market-wide screen** of the whole universe (same for "
+            "everyone — your portfolio only drives the *Exit alerts* tab). "
+            "Momentum candidates meant to play out over **2–8 weeks**: the "
+            "stock must already be RISING over the past month, with the "
+            "score built from momentum, signal confidence, a healthy (not "
+            "overheated) RSI, volume confirmation and the market phase — "
+            "and it must clear a minimum overall score. Updates once per "
+            "trading day. An empty list means nothing clears the bar today "
+            "— that restraint is deliberate."
         )
         _render_cards(result["short_term"], "short-term")
     with tab_long:
         st.caption(
-            "ℹ️ Steadier compounders for a **3–18 month** hold: trading "
-            "above their own 200-day average (an established uptrend), low "
-            "volatility, and only suggested while the overall market phase "
-            "is bullish."
+            "ℹ️ A **market-wide screen** (independent of your portfolio). "
+            "Steadier compounders for a **3–18 month** hold: trading above "
+            "their own 200-day average (an established uptrend), low "
+            "volatility, and only suggested while the stock's own phase is "
+            "bullish. Updates once per trading day."
         )
         _render_cards(result["long_term"], "long-term")
     with tab_exit:

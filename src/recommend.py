@@ -41,8 +41,12 @@ Long-term weights
 
 Filters
 -------
-Short-term : Signal ≥ 0, Confidence ≥ 0.30, Return_20d > −10%, Regime ≥ SIDEWAYS.
+Short-term : Signal ≥ 0, Confidence ≥ 0.30, Return_20d > 0, Regime ≥ SIDEWAYS,
+             composite Score ≥ 0.25 (absolute quality floor — being the only
+             stock to clear the gates does not by itself make a stock a pick).
 Long-term  : Close > MA200, Signal ≥ 0, Regime = BULL, Volatility_20 < 0.45.
+             (No extra floor needed: the binary above-MA200 term already
+             contributes 0.25, and the BULL + MA200 gates encode coherence.)
 """
 
 from __future__ import annotations
@@ -177,11 +181,19 @@ class RecommendationEngine:
             return snap
 
         df = snap.copy()
-        # Filter
+        # Filter.
+        #
+        # Return_20d must be STRICTLY POSITIVE (was > −10%): this is a
+        # momentum screen, and a momentum candidate that has been falling
+        # for a month is a contradiction in terms. Real incident
+        # (2026-06-10): WIPRO — Hold signal, 20-day return −3.9%, RSI 30 —
+        # was the only name to squeak past the loose filter and therefore
+        # headlined the tab as "#1" with a momentum component of exactly
+        # 0.00. Last-man-standing is not a recommendation.
         df = df[
             (df["Signal"] >= 0) &
             (df["Confidence"] >= 0.30) &
-            (df["Return_20d"] > -0.10) &
+            (df["Return_20d"] > 0.0) &
             (df["Regime"].isin([C.REGIME_CODES["SIDEWAYS"], C.REGIME_CODES["BULL"]]))
         ].copy()
         if df.empty:
@@ -199,6 +211,18 @@ class RecommendationEngine:
         df["Score"] = (
             0.30 * mom + 0.25 * conf + 0.20 * rsi_s + 0.15 * vol_s + 0.10 * reg_s
         )
+        # ABSOLUTE quality floor — ranking alone isn't enough. The filter
+        # above is a pass/fail gate per condition, but a stock can clear
+        # every gate minimally and still be a poor idea (regime bonus 0.10
+        # + threshold confidence 0.075 ≈ 0.18 with zero momentum/RSI/volume
+        # contribution). Requiring Score ≥ 0.25 means at least one engine
+        # beyond "the market is bullish" actually likes the stock; genuine
+        # momentum candidates (e.g. +10% over 20d at conf 0.30 in BULL)
+        # score ≈ 0.31 and pass comfortably. An empty list is the honest
+        # output when nothing qualifies — the UI says exactly that.
+        df = df[df["Score"] >= 0.25]
+        if df.empty:
+            return df
         df["Type"] = "Short-Term"
         df["Holding_Period"] = df["Volatility_20"].apply(
             lambda v: _holding_period(v, "short_term")
