@@ -234,6 +234,18 @@ NSE_SECTORS: dict[str, str] = {
     "TATASTEEL.NS": "Metals", "HINDALCO.NS": "Metals",
 
     "BHARTIARTL.NS": "Telecom",
+
+    # Off-universe holdings seen in real user statements (resolved by the
+    # parser's ISIN map + lazy-loaded). Without these they'd all lump into
+    # "Other" and the sector treemap / concentration warnings lose meaning.
+    "HINDZINC.NS": "Metals",
+    "TATACAP.NS": "Financial Services",
+    # Commodity ETFs — gold and silver kept as separate sectors because they
+    # hedge different risks (gold = monetary/fear asset, silver = part
+    # industrial); merging them would hide a tilt toward one metal.
+    "GOLDBEES.NS": "Gold ETF", "GOLDIETF.NS": "Gold ETF",
+    "SILVERBEES.NS": "Silver ETF", "SILVERIETF.NS": "Silver ETF",
+    "TATSILV.NS": "Silver ETF",
 }
 
 

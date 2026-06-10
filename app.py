@@ -1063,47 +1063,39 @@ def holdings_uploader(key_prefix: str,
     with tab_upload:
         st.caption(
             "Upload a broker export (Groww, Zerodha, ICICI Direct…) — any "
-            "title/summary block at the top is skipped automatically. "
+            "title/summary block at the top is skipped automatically, and a "
+            "successful upload is used **immediately** (no extra click). "
             "Auto-detects your schema: **Ticker/ISIN + Amount**, or "
-            "**+ Quantity & Avg Price**. Stocks are matched by symbol *or* "
-            "**ISIN**; non-equity rows (e.g. gold/silver ETFs) are skipped."
+            "**+ Quantity & Avg Price**, or a full statement with **Closing "
+            "value** (preferred — enables exact share counts + true P&L). "
+            "Stocks are matched by symbol *or* **ISIN**; NSE-listed gold/"
+            "silver **ETFs are analysed too**."
         )
-        # If a previous upload was committed, show it's the ACTIVE selection
-        # (so the page analyses your file, not the example text) and let the
-        # user clear it to switch back.
-        if st.session_state.get(sess_key):
-            c_a, c_b = st.columns([0.72, 0.28])
-            c_a.success(
-                f"✓ Using your **{len(st.session_state[sess_key])}** uploaded "
-                "holding(s) — this overrides the example in *Type / Paste*."
-            )
-            if c_b.button("✖ Clear uploaded", key=f"{key_prefix}_clear"):
-                st.session_state.pop(sess_key, None)
-                st.rerun()
+        # The uploader key carries a NONCE so "✖ Clear uploaded" can actually
+        # reset the widget: popping session_state alone isn't enough, because
+        # the file would still sit in the uploader and re-commit itself on the
+        # very next rerun. Bumping the nonce gives Streamlit a brand-new
+        # (empty) uploader instead.
+        nonce = st.session_state.setdefault("upload_nonce", 0)
         up = st.file_uploader(
             "Choose file", type=["csv", "xlsx", "xls", "pdf"],
-            key=f"{key_prefix}_upload",
+            key=f"{key_prefix}_upload_{nonce}",
             help="CSV and Excel: first sheet only. PDF: tables auto-extracted.",
         )
         if up is not None:
             try:
                 with st.spinner(f"Parsing {up.name}…"):
-                    parsed = parse_holdings_file(up, filename=up.name)
-                st.success(f"Parsed {len(parsed)} holdings from **{up.name}**.")
-                preview = (pd.DataFrame(
-                    [{"Ticker": k, "Amount (₹)": v} for k, v in parsed.items()])
-                    .sort_values("Amount (₹)", ascending=False))
-                st.dataframe(
-                    preview.style.format({"Amount (₹)": "{:,.0f}"}),
-                    use_container_width=True, hide_index=True, height=240,
-                )
-                if st.button("✅ Use these holdings", key=f"{key_prefix}_use",
-                             type="primary"):
-                    # Persist to session_state and rerun so the selection
-                    # survives the separate "Analyze" click and takes
-                    # precedence over the example text below.
-                    st.session_state[sess_key] = parsed
-                    st.rerun()
+                    parsed, detail = parse_holdings_file(
+                        up, filename=up.name, with_details=True)
+                # AUTO-COMMIT — the old flow required a second
+                # "✅ Use these holdings" click after the success message, and
+                # clicking "Analyze portfolio" without it silently analysed
+                # the DEMO portfolio instead (user saw INFY & friends in their
+                # charts). A successful parse now becomes the active portfolio
+                # immediately; typing custom holdings or "✖ Clear" still
+                # overrides it (see priority block at the end).
+                st.session_state[sess_key] = parsed
+                st.session_state["my_holdings_detail"] = detail
             except Exception as e:
                 st.error(f"Couldn't parse the file: {e}")
                 st.info(
@@ -1112,6 +1104,52 @@ def holdings_uploader(key_prefix: str,
                     "a Quantity + Avg-Price pair. See the **Download template** "
                     "tab for a working example."
                 )
+
+        # Show the ACTIVE committed portfolio (whether it was uploaded just
+        # now or on a previous visit) + a clear escape hatch.
+        if st.session_state.get(sess_key):
+            committed = st.session_state[sess_key]
+            detail = st.session_state.get("my_holdings_detail") or {}
+            c_a, c_b = st.columns([0.72, 0.28])
+            c_a.success(
+                f"✓ Using your **{len(committed)}** uploaded holding(s) — "
+                "active here AND on the Recommendations page. Overrides the "
+                "example in *Type / Paste*."
+            )
+            if c_b.button("✖ Clear uploaded", key=f"{key_prefix}_clear"):
+                st.session_state.pop(sess_key, None)
+                st.session_state.pop("my_holdings_detail", None)
+                st.session_state["upload_nonce"] = nonce + 1
+                st.rerun()
+            # Rows the parser could NOT match to an NSE symbol are surfaced
+            # loudly — a holding silently vanishing from the analysis is how
+            # totals stop reconciling with the broker's own summary.
+            if detail.get("skipped"):
+                st.warning(
+                    f"⚠️ {len(detail['skipped'])} row(s) had a value but no "
+                    f"recognisable NSE symbol and are **excluded**: "
+                    f"{', '.join(detail['skipped'][:6])}"
+                )
+            qty_map = detail.get("quantity") or {}
+            inv_map = detail.get("invested") or {}
+            rows = []
+            for t, a in committed.items():
+                row = {"Ticker": t, "Value (₹)": a}
+                if qty_map:
+                    row["Qty"] = qty_map.get(t)
+                if inv_map:
+                    row["Invested (₹)"] = inv_map.get(t)
+                rows.append(row)
+            preview = pd.DataFrame(rows).sort_values("Value (₹)", ascending=False)
+            fmt: dict = {"Value (₹)": "{:,.0f}"}
+            if "Invested (₹)" in preview.columns:
+                fmt["Invested (₹)"] = "{:,.0f}"
+            if "Qty" in preview.columns:
+                fmt["Qty"] = "{:g}"
+            st.dataframe(
+                preview.style.format(fmt, na_rep="—"),
+                use_container_width=True, hide_index=True, height=240,
+            )
 
     text_holdings: dict[str, float] = {}
     with tab_text:
@@ -1164,7 +1202,11 @@ def holdings_uploader(key_prefix: str,
     #   3. the example / default starter text.
     if text_is_custom:
         # Typing your own holdings commits them as the shared portfolio too.
+        # Typed lines carry no quantity/invested info, so any upload detail
+        # is now stale — drop it or live-value maths would mix share counts
+        # from the old file with amounts from the new text.
         st.session_state[sess_key] = text_holdings
+        st.session_state["my_holdings_detail"] = None
         return text_holdings
     if st.session_state.get(sess_key):
         return st.session_state[sess_key]
@@ -1759,32 +1801,60 @@ def page_portfolio_analyzer(pipe: dict) -> None:
     v = pa.var
 
     # ------------------ Live portfolio value (delayed-intraday) ------------------
-    # We interpret the uploaded "Amount" as the position's value at the most
-    # recent EOD close. Implied shares = amount / last_close → live value =
-    # implied_shares × LTP. This gives an honest "since end-of-day" delta
-    # without needing the user's actual cost basis.
+    # Two marking modes, picked per-holding:
+    #   * EXACT — broker statements carry a Quantity column; live value is
+    #     then simply qty × LTP, and the uploaded amount (the statement's
+    #     closing value) is only the stale-quote fallback.
+    #   * IMPLIED — typed/compact holdings have only a rupee amount, which we
+    #     interpret as the position's value at the most recent EOD close:
+    #     implied shares = amount / last_close → live = implied × LTP.
+    # When the statement also carries Buy value, the delta is measured
+    # against TRUE invested capital — i.e. the card shows real unrealised
+    # P&L, matching the broker app's own "Returns" number.
     render_live_header()
+    detail = st.session_state.get("my_holdings_detail") or {}
+    quantities = {t: q for t, q in (detail.get("quantity") or {}).items()
+                  if t in holdings}
+    inv_map = detail.get("invested") or {}
+    # Invested total only counts holdings that actually loaded (a skipped
+    # ticker's cost would inflate the baseline against a live value that
+    # can't include it).
+    invested_total = (sum(inv_map.get(t, holdings[t]) for t in holdings)
+                      if inv_map else None)
     live_value, live_delta_inr, live_delta_pct = _compute_live_portfolio_value(
-        holdings, signaled,
+        holdings, signaled, quantities=quantities, baseline=invested_total,
     )
     # Labels kept SHORT so they don't ellipsize inside the metric tiles
     # ("Cost basis (uploaded)" rendered as "COST BASIS (UPLOA…") — the
     # explanation lives in the ⓘ hover tooltip instead.
     c1, c2, c3, c4, c5 = st.columns(5)
-    metric_card(c1, "Cost basis", format_inr(m['total_value']),
-                help_text="Total invested amount from your uploaded/typed "
-                          "holdings — the anchor every delta is measured from.")
+    if invested_total is not None:
+        metric_card(c1, "Invested", format_inr(invested_total),
+                    help_text="True cost basis — the Buy value column of your "
+                              "uploaded statement, summed over the holdings "
+                              "that loaded.")
+    else:
+        metric_card(c1, "Cost basis", format_inr(m['total_value']),
+                    help_text="Total amount from your uploaded/typed holdings "
+                              "— the anchor every delta is measured from.")
     if live_value is not None:
         delta_str = (f"{format_inr(live_delta_inr)}  "
                      f"({format_pct(live_delta_pct)})")
+        pnl_note = ("Delta = unrealised P&L vs your invested value."
+                    if invested_total is not None
+                    else "Delta vs the uploaded amounts.")
         if is_market_open():
             label = "Live value"
-            tip = ("Intraday — marked to the delayed LTP. Updates ~every 60s "
-                   "with cache refresh.")
+            tip = ("Intraday — marked to the delayed LTP"
+                   + (" using your statement's share counts. "
+                      if quantities else ". ")
+                   + pnl_note)
         else:
             label = "Close value"
-            tip = ("Marked to most recent session's close. Live updates resume "
-                   "when markets reopen.")
+            tip = ("Marked to most recent session's close"
+                   + (" using your statement's share counts. "
+                      if quantities else ". ")
+                   + pnl_note + " Live updates resume when markets reopen.")
         metric_card(c2, label, format_inr(live_value),
                     delta=delta_str, help_text=tip)
     else:
@@ -1867,24 +1937,47 @@ def page_portfolio_analyzer(pipe: dict) -> None:
 def _compute_live_portfolio_value(
     holdings: dict[str, float],
     signaled: dict[str, pd.DataFrame],
+    quantities: dict[str, float] | None = None,
+    baseline: float | None = None,
 ) -> tuple[float | None, float, float]:
     """Mark each holding to live LTP and return (total, ₹ delta, % delta).
 
-    Implied shares per holding = ``amount / last_close``. Live value of the
-    holding = implied_shares × LTP. The aggregate live value is summed across
-    all holdings; the delta is computed against the uploaded cost basis.
+    Marking, per holding:
+      * **Exact** — when ``quantities`` carries the real share count (broker
+        statements do), live value = ``qty × LTP``. No approximation.
+      * **Implied** — otherwise ``amount / last_close`` shares are assumed,
+        i.e. the amount is treated as the position's value at the most
+        recent EOD close. Fine for typed holdings; wrong for a Buy-value
+        amount on a stock that has moved — which is exactly why statements
+        get the exact path.
+
+    The delta is measured against ``baseline`` when given (true invested
+    capital → the delta IS unrealised P&L), else against the sum of the
+    uploaded amounts.
 
     Returns ``(None, 0.0, 0.0)`` if every live quote is stale — callers
     render an unobtrusive '—' instead.
     """
     if not holdings:
         return None, 0.0, 0.0
+    quantities = quantities or {}
     quotes = cached_live_quotes(tuple(holdings.keys()))
-    cost_basis = float(sum(holdings.values()))
+    cost_basis = float(baseline) if baseline is not None \
+        else float(sum(holdings.values()))
     live_total = 0.0
     fresh_any = False
     for ticker, amount in holdings.items():
         q = quotes.get(ticker)
+        if q is None or q.get("stale"):
+            live_total += amount                    # no fresh data → no change
+            continue
+        qty = quantities.get(ticker)
+        if qty is not None and qty > 0:
+            # Exact path: the statement told us the share count.
+            live_total += qty * float(q["last_price"])
+            fresh_any = True
+            continue
+        # Implied path — needs a last close to back out a share count.
         df = signaled.get(ticker)
         # Guard against fully-NaN Close series (would IndexError on iloc[-1]).
         last_close: float | None = None
@@ -1892,8 +1985,8 @@ def _compute_live_portfolio_value(
             closes = df["Close"].dropna()
             if not closes.empty:
                 last_close = float(closes.iloc[-1])
-        if q is None or q.get("stale") or last_close is None or last_close <= 0:
-            live_total += amount                    # no fresh data → no change
+        if last_close is None or last_close <= 0:
+            live_total += amount
             continue
         implied_shares = amount / last_close
         live_total += implied_shares * float(q["last_price"])
