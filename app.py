@@ -251,6 +251,64 @@ st.markdown(
             animation: fadeInUp var(--dur-slow) var(--ease-out);
         }
 
+        /* Staggered entrance for columns inside a row — KPI tiles and
+           ticker cards "deal in" left-to-right (40ms apart) instead of
+           popping in as one block. `both` fill-mode keeps the delayed
+           tiles invisible until their turn. Capped at 5 children because
+           no row in the app is wider than 5 columns. */
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            animation: fadeInUp var(--dur-slow) var(--ease-out) both;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) { animation-delay: 40ms; }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(3) { animation-delay: 80ms; }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(4) { animation-delay: 120ms; }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(5) { animation-delay: 160ms; }
+
+        /* ============================================================
+           5b. Live-market pulse + quote-card micro-interactions
+           ------------------------------------------------------------
+           The pulse rings broadcast "this number is alive". Two variants:
+             * .pa-pulse-dot        — white dot for the dark status-bar pill
+             * .pa-pulse-dot--teal  — teal dot for the white ticker cards
+           Box-shadow rings are GPU-cheap and read on both themes. The
+           global prefers-reduced-motion guard (§7) freezes them for
+           motion-sensitive users automatically.
+           ============================================================ */
+        @keyframes paPulse {
+            0%   { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.55); }
+            70%  { box-shadow: 0 0 0 6px rgba(255, 255, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+        }
+        @keyframes paPulseTeal {
+            0%   { box-shadow: 0 0 0 0 rgba(15, 181, 174, 0.50); }
+            70%  { box-shadow: 0 0 0 5px rgba(15, 181, 174, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(15, 181, 174, 0); }
+        }
+        .pa-pulse-dot {
+            display: inline-block; width: 7px; height: 7px;
+            border-radius: 50%; background: #ffffff;
+            margin-right: 5px; vertical-align: 1px;
+            animation: paPulse 1.8s ease-out infinite;
+        }
+        .pa-pulse-dot--teal {
+            width: 6px; height: 6px; background: #0fb5ae;
+            margin-right: 4px; vertical-align: 1px;
+            animation: paPulseTeal 1.8s ease-out infinite;
+        }
+
+        /* Ticker-tape price cards (raw-HTML, so the stMetric hover rule
+           can't reach them) get the same lift treatment as KPI tiles. */
+        .pa-quote-card {
+            transition: transform var(--dur-med) var(--ease-out),
+                        box-shadow var(--dur-med) var(--ease-out),
+                        border-color var(--dur-med) var(--ease-out);
+        }
+        .pa-quote-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--lift-shadow);
+            border-color: #cbd5e1 !important;
+        }
+
         /* KPI tiles lift on hover (theme-neutral tint deepens slightly) */
         [data-testid="stMetric"]:hover {
             transform: translateY(-2px);
@@ -345,7 +403,8 @@ st.markdown(
             }
             [data-testid="stMetric"]:hover,
             .stButton > button:hover,
-            .stDownloadButton > button:hover {
+            .stDownloadButton > button:hover,
+            .pa-quote-card:hover {
                 transform: none !important;
             }
         }
@@ -574,8 +633,17 @@ def sidebar_controls() -> dict:
                                 "re-fetches the latest bars and LTPs.")):
         st.cache_data.clear()
         clear_live_cache()
+        # Stamp the manual refresh so the sidebar can show data freshness —
+        # session-scoped (per browser tab), survives page navigation.
+        st.session_state["last_manual_refresh"] = now_ist()
         st.sidebar.success("Caches cleared. Reloading…")
         st.rerun()
+    _last_refresh = st.session_state.get("last_manual_refresh")
+    if _last_refresh is not None:
+        st.sidebar.caption(
+            f"⟳ Data refreshed "
+            f"{_last_refresh.strftime('%I:%M %p IST').lstrip('0')}"
+        )
 
     st.sidebar.caption(
         "ℹ️ Decision-support tool — not investment advice. Backtested "
@@ -774,9 +842,10 @@ def render_ticker_tape(tickers: tuple[str, ...], cols_per_row: int = 5) -> None:
             q = quotes.get(ticker)
             if q is None or q.get("stale"):
                 col.markdown(
-                    f"<div style='border:1px solid #e5e7eb;border-radius:8px;"
-                    f"padding:8px 10px;background:#f3f4f6;'>"
-                    f"<div style='font-size:0.78rem;color:#4b5563;'>{ticker}</div>"
+                    f"<div class='pa-quote-card' style='border:1px solid #e5e7eb;"
+                    f"border-radius:8px;padding:8px 10px;background:#f3f4f6;'>"
+                    f"<div style='font-size:0.78rem;color:#4b5563;'>"
+                    f"{ticker.replace('.NS', '').replace('^', '')}</div>"
                     f"<div style='font-size:1.05rem;font-weight:700;color:#9ca3af;'>—</div>"
                     f"<div style='font-size:0.75rem;color:#9ca3af;'>no data</div>"
                     "</div>", unsafe_allow_html=True,
@@ -787,18 +856,39 @@ def render_ticker_tape(tickers: tuple[str, ...], cols_per_row: int = 5) -> None:
             color = THEME["bull"] if change >= 0 else THEME["bear"]
             sign = "+" if change >= 0 else ""
             is_live = bool(q.get("is_live"))
-            sub_label = (f"Live · {_fmt_as_of(q)}" if is_live
+            # Live cards get a small pulsing teal dot — a subconscious
+            # "this number is ticking" cue; closed-market cards stay calm.
+            # While LIVE the as-of date is today (obvious) so we omit it and
+            # the ticker keeps the row's width; when showing a CLOSE the
+            # date is the critical context ("Fri 06-Jun", not today) so it
+            # stays. This is what stops 5-up rows from ellipsizing tickers.
+            # NOTE: needs BOTH classes — the base supplies display:inline-block
+            # + border-radius (without it the span paints as a smeared bar),
+            # the --teal modifier recolours and re-times the pulse.
+            live_dot = ("<span class='pa-pulse-dot pa-pulse-dot--teal'></span>"
+                        if is_live else "")
+            sub_label = (f"{live_dot}Live" if is_live
                           else f"Close · {_fmt_as_of(q)}")
             bg = "white" if is_live else "#f8fafc"
+            # ".NS" is constant noise on an all-NSE board — drop it from the
+            # card label (uploads/search still use the full symbol).
+            short_name = ticker.replace(".NS", "").replace("^", "")
             # NOTE: every text element gets an EXPLICIT colour.
             # Streamlit's dark theme inherits a light text colour, which
             # made the price invisible against the white card background.
+            # Header is a flex row (ticker left, freshness right) — the old
+            # float:right span wrapped unpredictably on long ticker names
+            # and left the labels vertically misaligned across cards.
             col.markdown(
-                f"<div style='border:1px solid #e5e7eb;border-radius:8px;"
-                f"padding:8px 10px;background:{bg};'>"
-                f"<div style='font-size:0.78rem;color:#4b5563;'>"
-                f"{ticker}  <span style='float:right;color:#6b7280;font-size:0.7rem;'>"
-                f"{sub_label}</span></div>"
+                f"<div class='pa-quote-card' style='border:1px solid #e5e7eb;"
+                f"border-radius:8px;padding:8px 10px;background:{bg};'>"
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:baseline;gap:6px;'>"
+                f"<span style='font-size:0.78rem;color:#4b5563;font-weight:600;"
+                f"overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>"
+                f"{short_name}</span>"
+                f"<span style='color:#6b7280;font-size:0.68rem;"
+                f"white-space:nowrap;flex:0 0 auto;'>{sub_label}</span></div>"
                 f"<div style='font-size:1.05rem;font-weight:700;color:#111827;'>"
                 f"{format_inr_price(q['last_price'])}</div>"
                 f"<div style='font-size:0.78rem;color:{color};font-weight:600;'>"
@@ -880,13 +970,17 @@ def render_top_status_bar(pipe: dict | None = None) -> None:
     status_label, status_color = market_status_text()
     # 12-hour clock with leading zero stripped — e.g. "4:30 PM IST"
     time_str = now_ist().strftime("%I:%M %p IST").lstrip("0")
+    # While the session is live the pill's dot PULSES (CSS ring animation,
+    # §5b) — paired with the auto-refresh fragment in main() this makes the
+    # bar visibly alive. After hours it reverts to a calm static dot.
+    dot_html = ("<span class='pa-pulse-dot'></span>" if open_now else "● ")
     right_html = (
         f"<span style='color:#cbd5e1;font-size:0.74rem;margin-right:9px;"
         f"font-weight:600;'>{time_str}</span>"
         f"<span style='background:{status_color};color:white;"
         f"padding:3px 9px;border-radius:10px;font-size:0.62rem;"
         f"font-weight:700;letter-spacing:0.05em;'>"
-        f"● {status_label}</span>"
+        f"{dot_html}{status_label}</span>"
     )
 
     # Wrap behavior:
@@ -1125,17 +1219,38 @@ def page_dashboard(pipe: dict) -> None:
                     format_inr_price(latest['Close'], precision=0),
                     help_text="Live quote unavailable; showing last EOD close.")
     if "Regime_Prob_Bull" in bench_labelled.columns:
-        metric_card(c2, "P(Bull) [HMM]", f"{float(latest['Regime_Prob_Bull'])*100:.1f}%")
-        metric_card(c3, "P(Bear) [HMM]", f"{float(latest['Regime_Prob_Bear'])*100:.1f}%")
-    metric_card(c4, "Universe tickers", f"{len(signaled)}")
+        metric_card(c2, "P(Bull) [HMM]",
+                    f"{float(latest['Regime_Prob_Bull'])*100:.1f}%",
+                    help_text="Hidden-Markov-Model posterior probability that "
+                              "NIFTY 50 is in its BULL state on the latest "
+                              "bar. The remainder to 100% sits in the "
+                              "SIDEWAYS state.")
+        metric_card(c3, "P(Bear) [HMM]",
+                    f"{float(latest['Regime_Prob_Bear'])*100:.1f}%",
+                    help_text="Posterior probability of the BEAR state — the "
+                              "strategy's main risk-off trigger (smaller "
+                              "positions, harder buy gate).")
+    metric_card(c4, "Universe tickers", f"{len(signaled)}",
+                help_text="Stocks loaded into this run's pipeline. Trim or "
+                          "extend it under ⚙️ Pipeline settings in the sidebar.")
 
     # --- Ticker tape (label adapts to market state) ---
     if is_market_open():
         st.subheader("Universe — live (delayed) quotes")
+        st.caption("⟳ Auto-refreshes every 60 s while NSE is in session.")
     else:
         st.subheader("Universe — last close")
     universe_tickers = tuple(sorted(signaled.keys()))[:15]   # cap to keep it readable
-    render_ticker_tape(universe_tickers, cols_per_row=5)
+    # Same fragment treatment as the top status bar: while the market is
+    # open the 15-card tape refreshes itself every 60s (one batched quote
+    # fetch, TTL-aligned) — the dashboard stays "alive" with zero clicks.
+    _fragment = getattr(st, "fragment", None)
+    if _fragment is not None:
+        _fragment(render_ticker_tape,
+                  run_every="60s" if is_market_open() else None)(
+            universe_tickers, cols_per_row=5)
+    else:
+        render_ticker_tape(universe_tickers, cols_per_row=5)
 
     # --- Top BUY signals ---
     st.subheader("Top BUY signals (latest bar)")
@@ -1652,16 +1767,22 @@ def page_portfolio_analyzer(pipe: dict) -> None:
     live_value, live_delta_inr, live_delta_pct = _compute_live_portfolio_value(
         holdings, signaled,
     )
+    # Labels kept SHORT so they don't ellipsize inside the metric tiles
+    # ("Cost basis (uploaded)" rendered as "COST BASIS (UPLOA…") — the
+    # explanation lives in the ⓘ hover tooltip instead.
     c1, c2, c3, c4, c5 = st.columns(5)
-    metric_card(c1, "Cost basis (uploaded)", format_inr(m['total_value']))
+    metric_card(c1, "Cost basis", format_inr(m['total_value']),
+                help_text="Total invested amount from your uploaded/typed "
+                          "holdings — the anchor every delta is measured from.")
     if live_value is not None:
         delta_str = (f"{format_inr(live_delta_inr)}  "
                      f"({format_pct(live_delta_pct)})")
         if is_market_open():
-            label = "Live value (intraday)"
-            tip = "Marked to delayed LTP. Updates ~every 60s with cache refresh."
+            label = "Live value"
+            tip = ("Intraday — marked to the delayed LTP. Updates ~every 60s "
+                   "with cache refresh.")
         else:
-            label = "Latest close value"
+            label = "Close value"
             tip = ("Marked to most recent session's close. Live updates resume "
                    "when markets reopen.")
         metric_card(c2, label, format_inr(live_value),
@@ -1669,19 +1790,30 @@ def page_portfolio_analyzer(pipe: dict) -> None:
     else:
         metric_card(c2, "Live value", "—",
                     help_text="Live quotes unavailable right now.")
-    metric_card(c3, "Ann. return", format_pct(m['ann_return']))
+    metric_card(c3, "Ann. return", format_pct(m['ann_return']),
+                help_text="Weight-averaged annualised return over the common "
+                          "history window shared by all holdings.")
     metric_card(c4, "Ann. volatility", format_pct(m['ann_vol'], signed=False),
                 help_text="Markowitz σ_p = √(wᵀ Σ w)")
-    metric_card(c5, "Sharpe", f"{m['sharpe']:.2f}")
+    metric_card(c5, "Sharpe", f"{m['sharpe']:.2f}",
+                help_text="Excess return over the 6.5% risk-free rate per "
+                          "unit of volatility. Above ~1 is good for a "
+                          "buy-and-hold equity book.")
 
     c1, c2, c3, c4 = st.columns(4)
     metric_card(c1, "Diversification", f"{d['score']:.0f} / 100",
-                delta=d["label"])
-    metric_card(c2, "Mean correlation", f"{d['mean_pairwise_correlation']:.2f}")
+                delta=d["label"],
+                help_text="Composite: 50% mean pairwise correlation + 25% "
+                          "sector entropy + 25% effective-N of weights (1/HHI).")
+    metric_card(c2, "Mean correlation", f"{d['mean_pairwise_correlation']:.2f}",
+                help_text="Average pairwise correlation of daily returns — "
+                          "lower means the holdings hedge each other better.")
     metric_card(c3, "VaR 95% (1d)", format_inr(abs(v['var_95_inr'])),
-                help_text=f"{v['var_95_pct']*100:.2f}% historical")
-    metric_card(c4, "CVaR 95% (Expected Shortfall)",
-                format_inr(abs(v['cvar_95_inr'])))
+                help_text=f"{v['var_95_pct']*100:.2f}% historical — the loss "
+                          "exceeded on the worst 5% of days.")
+    metric_card(c4, "CVaR 95%", format_inr(abs(v['cvar_95_inr'])),
+                help_text="Expected Shortfall — the AVERAGE loss across those "
+                          "worst-5% days (what a bad day actually costs).")
 
     # ------------------ Sector treemap + correlation heatmap ------------------
     left, right = st.columns([0.55, 0.45])
@@ -1910,25 +2042,64 @@ def _render_performance_tab(bt: Backtester, benchmark: pd.DataFrame) -> None:
     """Original Backtest Lab content (tearsheet + charts + trade log)."""
     m = bt.metrics
 
+    # One-line "what exactly was simulated" so the tearsheet can't be
+    # misread as a frictionless vectorised backtest.
+    st.caption(
+        f"Event-driven daily simulation — {bt.txn_cost*100:.2f}% cost per "
+        f"side · {bt.position_size_pct*100:.0f}% position cap · max "
+        f"{bt.max_positions} open positions · stops fill at 2×ATR · idle "
+        f"cash accrues the {bt.risk_free_rate*100:.1f}% risk-free rate."
+    )
+
     # ---- Headline tearsheet ----
+    # Every metric gets a one-line ⓘ tooltip: recruiters (and the user six
+    # months from now) shouldn't need the whitepaper open to read the grid.
     c1, c2, c3, c4 = st.columns(4)
     metric_card(c1, "Final NAV", format_inr(m['final_nav']),
-                delta=format_pct(m['total_return']) + " total")
-    metric_card(c2, "CAGR", format_pct(m['cagr']))
-    metric_card(c3, "Sharpe", f"{m['sharpe']:.2f}")
-    metric_card(c4, "Max DD", format_pct(m['max_drawdown']))
+                delta=format_pct(m['total_return']) + " total",
+                help_text="Ending equity, net of all transaction costs, "
+                          "including risk-free interest on idle cash.")
+    metric_card(c2, "CAGR", format_pct(m['cagr']),
+                help_text="Compound annual growth rate over the full window.")
+    metric_card(c3, "Sharpe", f"{m['sharpe']:.2f}",
+                help_text="Annualised excess return over the 6.5% risk-free "
+                          "rate per unit of volatility.")
+    metric_card(c4, "Max DD", format_pct(m['max_drawdown']),
+                help_text="Largest peak-to-trough equity decline — the worst "
+                          "pain a holder of this strategy ever felt.")
     c1, c2, c3, c4 = st.columns(4)
-    metric_card(c1, "Sortino", f"{m['sortino']:.2f}")
-    metric_card(c2, "Calmar", f"{m['calmar']:.2f}")
+    metric_card(c1, "Sortino", f"{m['sortino']:.2f}",
+                help_text="Sharpe's sibling that penalises only DOWNSIDE "
+                          "volatility — upside swings aren't 'risk'.")
+    metric_card(c2, "Calmar", f"{m['calmar']:.2f}",
+                help_text="CAGR ÷ |max drawdown| — return earned per unit of "
+                          "worst-case pain.")
     metric_card(c3, "Win rate", f"{m['win_rate']*100:.1f}%",
-                delta=f"{m['n_trades']} trades")
-    metric_card(c4, "Profit factor", f"{m['profit_factor']:.2f}")
+                delta=f"{m['n_trades']} trades",
+                help_text="Share of round-trips closed at a profit. Trend "
+                          "systems run low win rates and pay for it with "
+                          "asymmetric winners — read with Profit factor.")
+    metric_card(c4, "Profit factor", f"{m['profit_factor']:.2f}",
+                help_text="Gross profits ÷ gross losses. >1.5 is healthy; "
+                          "2+ is strong.")
     if not np.isnan(m.get("alpha", np.nan)):
         c1, c2, c3, c4 = st.columns(4)
-        metric_card(c1, "Alpha (ann.)", format_pct(m['alpha']))
-        metric_card(c2, "Beta", f"{m['beta']:.2f}")
-        metric_card(c3, "R²", f"{m['r_squared']:.2f}")
-        metric_card(c4, "Outperformance", format_pct(m['outperformance']))
+        metric_card(c1, "Alpha (ann.)", format_pct(m['alpha']),
+                    help_text="Jensen's α vs NIFTY 50 (CAPM): return left "
+                              "over after paying for market exposure. See "
+                              "the Significance tab for whether it's real.")
+        metric_card(c2, "Beta", f"{m['beta']:.2f}",
+                    help_text="Sensitivity to NIFTY 50 — 0.3 means the book "
+                              "moves ~₹30 per ₹100 of index move. Low beta "
+                              "is the defensive design goal.")
+        metric_card(c3, "R²", f"{m['r_squared']:.2f}",
+                    help_text="Share of daily variance explained by the "
+                              "benchmark regression.")
+        metric_card(c4, "Outperformance", format_pct(m['outperformance']),
+                    help_text="Total return minus NIFTY 50 buy-&-hold over "
+                              "the same window. Negative is EXPECTED for a "
+                              "defensive strategy in a bull tape — the win "
+                              "is ⅓ the drawdown at ~⅓ the beta.")
 
     st.subheader("Equity curve vs NIFTY 50")
     st.plotly_chart(equity_vs_benchmark_chart(bt, benchmark),
@@ -2706,11 +2877,21 @@ def page_recommendations(pipe: dict) -> None:
                 lvl = st.columns(5)
                 metric_card(lvl[0], "Entry zone",
                             f"{format_inr_price(row['Entry_Low'], 1)}–"
-                            f"{format_inr_price(row['Entry_High'], 1).lstrip('₹')}")
-                metric_card(lvl[1], "Stop", format_inr_price(row['Stop_Loss'], 1))
-                metric_card(lvl[2], "T1", format_inr_price(row['Target_1'], 1))
-                metric_card(lvl[3], "T2", format_inr_price(row['Target_2'], 1))
-                metric_card(lvl[4], "R/R", f"{rr:.1f}")
+                            f"{format_inr_price(row['Entry_High'], 1).lstrip('₹')}",
+                            help_text="±0.5% band around the last close — "
+                                      "stagger limit orders inside it instead "
+                                      "of chasing one print.")
+                metric_card(lvl[1], "Stop", format_inr_price(row['Stop_Loss'], 1),
+                            help_text="2× ATR(14) below entry — a volatility-"
+                                      "scaled stop (Turtle convention), not an "
+                                      "arbitrary percentage.")
+                metric_card(lvl[2], "T1", format_inr_price(row['Target_1'], 1),
+                            help_text="First target at 2× ATR (1:1 R/R) — "
+                                      "book partial profit, move stop to entry.")
+                metric_card(lvl[3], "T2", format_inr_price(row['Target_2'], 1),
+                            help_text="Runner target at 4× ATR (1:2 R/R).")
+                metric_card(lvl[4], "R/R", f"{rr:.1f}",
+                            help_text="Reward to T2 ÷ risk to stop.")
                 st.caption(
                     f"🧠 {row['Rationale']}  ·  RSI {float(row['RSI_14']):.0f}  ·  "
                     f"vol {float(row['Volatility_20'])*100:.0f}%  ·  "
@@ -2759,7 +2940,23 @@ def main() -> None:
         return
 
     # Global status bar shown on every page (Bloomberg-style index summary).
-    render_top_status_bar(pipe)
+    #
+    # Wrapped in a FRAGMENT with `run_every` so the bar re-renders itself
+    # every 60 seconds while NSE is in session — indices, the IST clock and
+    # the pulse all tick WITHOUT the user touching anything, and without
+    # re-running the (heavy, cached) pipeline: a fragment rerun re-executes
+    # only this function. 60s matches the live-quote cache TTL, so each
+    # tick lands just as the previous quote expires — one yfinance batch
+    # per minute, no hammering. After market close `run_every=None`
+    # disables the timer entirely (nothing would change anyway).
+    # Feature-detected like segmented_control: very old Streamlit versions
+    # simply degrade to a static bar.
+    _fragment = getattr(st, "fragment", None)
+    if _fragment is not None:
+        _fragment(render_top_status_bar,
+                  run_every="60s" if is_market_open() else None)(pipe)
+    else:
+        render_top_status_bar(pipe)
 
     page = cfg["page"]
     if page == "Dashboard":
