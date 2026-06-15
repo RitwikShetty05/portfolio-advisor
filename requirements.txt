@@ -3,8 +3,12 @@
 # Install with:  pip install -r requirements.txt
 
 # Core data & numerics
+# numpy capped <2.3: hmmlearn 0.3.3 ships a compiled wheel built against the
+# numpy ≤2.2 ABI, and importing it under numpy 2.3 throws an ImportError on
+# hosted boxes (this took the live app down once). Cap keeps the resolver on
+# the proven-compatible pair (numpy 2.1/2.2 + hmmlearn 0.3.3).
 pandas>=2.0.0
-numpy>=1.24.0
+numpy>=1.24.0,<2.3
 scipy>=1.10.0
 
 # Market data
@@ -14,8 +18,13 @@ yfinance>=0.2.40
 ta>=0.11.0
 
 # Machine learning
+# hmmlearn pinned exactly: it's the one compiled dependency, and an
+# unpinned >= let the resolver drift into a numpy-ABI-incompatible state on
+# a Streamlit Cloud redeploy. 0.3.3 is the proven-good version (paired with
+# the numpy<2.3 cap above). If hmmlearn ever fails to import anyway, the app
+# degrades to the KMeans regime method instead of crashing (see regime.py).
 scikit-learn>=1.3.0
-hmmlearn>=0.3.0
+hmmlearn==0.3.3
 
 # Visualisation
 plotly>=5.18.0

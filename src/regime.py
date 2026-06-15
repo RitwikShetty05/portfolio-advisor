@@ -52,10 +52,23 @@ try:
 except ImportError as e:  # pragma: no cover
     raise ImportError("scikit-learn is required") from e
 
+# hmmlearn ships a COMPILED extension, so its import can fail on a hosted
+# environment even when `pip install` succeeded — e.g. a numpy ABI mismatch
+# (a wheel built against numpy ≤2.1 imported under numpy 2.3) or a Python
+# version with no prebuilt wheel. That must NOT take down the whole app:
+# every page imports this module, but ONLY the HMM regime method actually
+# needs hmmlearn. So we import it SOFTLY — record availability, and let
+# __init__ fall back to KMeans (scikit-learn only) when it's missing. A
+# degraded-but-running app always beats a crashed one, especially on
+# launch day.
 try:
     from hmmlearn.hmm import GaussianHMM
-except ImportError as e:  # pragma: no cover
-    raise ImportError("hmmlearn is required for the HMM method") from e
+    _HMM_AVAILABLE = True
+    _HMM_IMPORT_ERROR: Exception | None = None
+except Exception as e:  # ImportError, or a numpy/ABI error raised at import
+    GaussianHMM = None  # type: ignore[assignment,misc]
+    _HMM_AVAILABLE = False
+    _HMM_IMPORT_ERROR = e
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config as C  # noqa: E402
@@ -100,12 +113,29 @@ class RegimeDetector:
     ) -> None:
         if method not in {"ma_crossover", "kmeans", "hmm"}:
             raise ValueError(f"Unknown method: {method!r}")
+        # Graceful degradation: if HMM was requested but hmmlearn couldn't be
+        # imported (missing wheel / numpy ABI mismatch on a hosted box), drop
+        # to KMeans rather than crash. KMeans produces the same Regime /
+        # Regime_Label columns the rest of the app depends on (it just can't
+        # emit the HMM posterior probabilities, so those two dashboard cards
+        # quietly don't render).
+        if method == "hmm" and not _HMM_AVAILABLE:
+            logger.warning(
+                "hmmlearn unavailable (%s) — falling back to the KMeans "
+                "regime method so the app stays up. Reinstall a "
+                "numpy-compatible hmmlearn to restore HMM.",
+                _HMM_IMPORT_ERROR,
+            )
+            method = "kmeans"
         self.method = method
         self.random_state = random_state
         self.smooth_window = smooth_window
         self.transition_matrix_: np.ndarray | None = None
         # Cached HMM artefacts, per-ticker, for downstream introspection.
-        self._last_hmm: dict[str, GaussianHMM] = {}
+        # Annotated as plain dict (not dict[str, GaussianHMM]) so the type
+        # reference can't NameError when GaussianHMM is None after a failed
+        # hmmlearn import.
+        self._last_hmm: dict = {}
 
     # ------------------------------------------------------------------
     # Public API
