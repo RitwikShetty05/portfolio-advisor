@@ -18,13 +18,18 @@ yfinance>=0.2.40
 ta>=0.11.0
 
 # Machine learning
-# hmmlearn pinned exactly: it's the one compiled dependency, and an
-# unpinned >= let the resolver drift into a numpy-ABI-incompatible state on
-# a Streamlit Cloud redeploy. 0.3.3 is the proven-good version (paired with
-# the numpy<2.3 cap above). If hmmlearn ever fails to import anyway, the app
-# degrades to the KMeans regime method instead of crashing (see regime.py).
+# hmmlearn is the ONE compiled dependency and the only thing that can fail
+# the cloud build: it has no prebuilt wheel for Python 3.13, so on a 3.13
+# host pip tries to compile it from source and the deploy hangs/fails ("app
+# stuck in the oven"). The environment marker installs it ONLY on Pythons
+# that have a wheel (≤3.12) — paired with the numpy<2.3 cap that's the
+# proven-good combo and HMM works. On 3.13 it's skipped and the app runs on
+# the KMeans regime method instead (graceful fallback in regime.py), so the
+# site ALWAYS boots regardless of the host's Python version. To force full
+# HMM on Cloud, set the app's Python version to 3.12 in Streamlit Cloud
+# Advanced settings and reboot.
 scikit-learn>=1.3.0
-hmmlearn==0.3.3
+hmmlearn==0.3.3; python_version < "3.13"
 
 # Visualisation
 plotly>=5.18.0
