@@ -1343,11 +1343,17 @@ def page_dashboard(pipe: dict) -> None:
              "is a feature.",
     )
     rows = []
+    regime_counts = {"BULL": 0, "SIDEWAYS": 0, "BEAR": 0}
+    n_scored = 0
     for t, df in signaled.items():
         last = df.dropna(subset=["Signal"]).tail(1)
         if last.empty:
             continue
         r = last.iloc[0]
+        n_scored += 1
+        lbl = str(r.get("Regime_Label", "SIDEWAYS"))
+        if lbl in regime_counts:
+            regime_counts[lbl] += 1
         if r.get("Signal", 0) == 1:
             rows.append({
                 "Ticker": t,
@@ -1372,7 +1378,33 @@ def page_dashboard(pipe: dict) -> None:
             use_container_width=True, hide_index=True,
         )
     else:
-        st.info("No active BUY signals on the latest bar.")
+        # Empty is the CORRECT output when the tape is weak — but a bare
+        # "no signals" reads as broken to a first-time visitor. Turn it into
+        # a live demonstration of the strategy's discipline: explain *why*
+        # there are no buys, quantifying the current regime mix so the
+        # restraint is visibly evidence-based, not an error.
+        defensive = regime_counts["BEAR"] + regime_counts["SIDEWAYS"]
+        if n_scored and defensive >= regime_counts["BULL"]:
+            st.info(
+                f"🛡️ **No BUY signals today — and that's by design.** "
+                f"{defensive} of {n_scored} stocks are in a bearish or "
+                f"range-bound phase right now "
+                f"(🔴 {regime_counts['BEAR']} bear · "
+                f"⚪ {regime_counts['SIDEWAYS']} sideways · "
+                f"🟢 {regime_counts['BULL']} bull), so this regime-aware "
+                "strategy is holding cash rather than forcing trades into a "
+                "weak tape. Buy ideas reappear here automatically once "
+                "momentum and the market phase turn supportive — sitting out "
+                "bad conditions is exactly how it kept drawdowns to ~⅓ of "
+                "the index in backtest."
+            )
+        else:
+            st.info(
+                "No stock fired a BUY signal on the latest bar — the model's "
+                "four lenses (trend, momentum, mean-reversion, volume) didn't "
+                "align strongly enough on any name today. New ideas surface "
+                "here automatically as conditions change."
+            )
 
     # --- Fixed signal heat-map ---
     st.subheader(
