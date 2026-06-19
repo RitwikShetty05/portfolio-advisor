@@ -1,0 +1,51 @@
+name: Keep Streamlit app awake
+
+# Streamlit Community Cloud's free tier puts an app to sleep after a stretch
+# of no visitor traffic. This workflow sends the app a small request on a
+# schedule so it stays warm — visitors (and recruiters) never land on the
+# "this app has gone to sleep 💤" screen.
+#
+# Notes / caveats:
+#   * GitHub delays scheduled jobs under load, so the real interval can be
+#     longer than requested — we ask for every ~15 min, which is ample.
+#   * GitHub auto-disables scheduled workflows after 60 days of NO repo
+#     activity; an occasional commit (or clicking "Enable workflow" in the
+#     Actions tab) keeps it alive.
+#   * This is the in-repo / no-account option. For the most reliable
+#     keep-warm AND downtime alerts, also point a free UptimeRobot HTTP
+#     monitor at the same URL (see SESSION_HANDOFF.md).
+
+on:
+  schedule:
+    # Offset from the top of the hour (:03, :18, :33, :48) to dodge the
+    # congestion at :00 where GitHub is most likely to drop/delay runs.
+    - cron: "3,18,33,48 * * * *"
+  workflow_dispatch: {}   # lets you trigger a ping manually from the Actions tab
+
+# Don't pile up runs if one is slow; the latest ping is all that matters.
+concurrency:
+  group: keep-awake
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping the live app
+        env:
+          APP_URL: "https://ritwik-portfolio-advisor.streamlit.app/"
+        run: |
+          # Follow redirects (-L) and send a browser-like UA so the request
+          # is treated as a real visit, not an opaque bot hit. Any 2xx/3xx
+          # means the app responded; we don't fail the job on transient
+          # blips (a single missed ping is harmless).
+          code=$(curl -sL -o /dev/null -w "%{http_code}" \
+                   --max-time 60 \
+                   -A "Mozilla/5.0 (keep-awake; github-actions)" \
+                   "$APP_URL" || echo "000")
+          echo "Pinged $APP_URL -> HTTP $code at $(date -u)"
+          case "$code" in
+            2*|3*) echo "App is awake. ✅" ;;
+            *)     echo "::warning::Unexpected status $code (transient? next ping will retry)" ;;
+          esac
