@@ -73,6 +73,54 @@ BENCHMARK: str = "^NSEI"
 
 
 # ---------------------------------------------------------------------------
+# Broader OPT-IN universe — NIFTY 100 (NIFTY 50 + NIFTY Next 50).
+# ---------------------------------------------------------------------------
+# The Recommendations screen can only suggest stocks that were loaded into the
+# pipeline. `UNIVERSE` (26) keeps the DEFAULT experience fast + stable on the
+# Streamlit Cloud free tier (1 GB RAM) — loading ~100 live HMM fits on every
+# page view for every visitor is what crashed the app before. So NIFTY 100 is
+# offered as an OPT-IN preset in the sidebar: heavier (slower first load, more
+# memory), but it lets the screen scan ~4× more of the market.
+#
+# To scan the ENTIRE market (~2,000 stocks) you'd move the heavy compute
+# offline (nightly batch over NSE bhavcopy → store signals → app just reads
+# them); that's a v2 architecture, not a config change.
+NIFTY_100: list[str] = [
+    # NIFTY 50 core (TMPV/TMCV stand in for the demerged TATAMOTORS)
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+    "SBIN.NS", "BHARTIARTL.NS", "HINDUNILVR.NS", "ITC.NS", "LICI.NS",
+    "LT.NS", "KOTAKBANK.NS", "AXISBANK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS",
+    "ASIANPAINT.NS", "MARUTI.NS", "TMPV.NS", "TMCV.NS", "HCLTECH.NS",
+    "WIPRO.NS", "TECHM.NS", "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS",
+    "DIVISLAB.NS", "POWERGRID.NS", "NTPC.NS", "ONGC.NS", "COALINDIA.NS",
+    "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "M&M.NS", "BAJAJ-AUTO.NS",
+    "HEROMOTOCO.NS", "EICHERMOT.NS", "NESTLEIND.NS", "BRITANNIA.NS", "TITAN.NS",
+    "ULTRACEMCO.NS", "GRASIM.NS", "ADANIENT.NS", "ADANIPORTS.NS", "INDUSINDBK.NS",
+    "HDFCLIFE.NS", "SBILIFE.NS", "TATACONSUM.NS", "APOLLOHOSP.NS", "BPCL.NS",
+    "SHRIRAMFIN.NS",
+    # NIFTY Next 50 reserves
+    "ABB.NS", "ADANIGREEN.NS", "ADANIPOWER.NS", "AMBUJACEM.NS", "BANKBARODA.NS",
+    "BERGEPAINT.NS", "BIOCON.NS", "BOSCHLTD.NS", "CANBK.NS", "CHOLAFIN.NS",
+    "COLPAL.NS", "DABUR.NS", "DLF.NS", "DMART.NS", "GAIL.NS",
+    "GODREJCP.NS", "GODREJPROP.NS", "HAVELLS.NS", "ICICIGI.NS", "ICICIPRULI.NS",
+    "INDIGO.NS", "IOC.NS", "IRCTC.NS", "JINDALSTEL.NS", "JIOFIN.NS",
+    "LICHSGFIN.NS", "LUPIN.NS", "MARICO.NS", "MOTHERSON.NS", "MUTHOOTFIN.NS",
+    "NAUKRI.NS", "PAYTM.NS", "PETRONET.NS", "PIDILITIND.NS", "PIIND.NS",
+    "PNB.NS", "PFC.NS", "RECLTD.NS", "SAIL.NS", "SBICARD.NS",
+    "SIEMENS.NS", "SRF.NS", "TATAPOWER.NS", "TORNTPHARM.NS", "TVSMOTOR.NS",
+    "UPL.NS", "VEDL.NS", "VOLTAS.NS", "YESBANK.NS", "ZOMATO.NS",
+]
+
+# Named presets the sidebar exposes. Stocks that fail the data-quality gate
+# (too few bars, recent IPO with sparse history, delisted) are dropped at load
+# time, so a preset is a *candidate* list — the live universe may be smaller.
+UNIVERSE_PRESETS: dict[str, list[str]] = {
+    "Core (26 — fast)": UNIVERSE,
+    "NIFTY 100 (broad — slower)": NIFTY_100,
+}
+
+
+# ---------------------------------------------------------------------------
 # 3. Date range
 # ---------------------------------------------------------------------------
 # Six years gives us enough data to span at least one bear-bull cycle

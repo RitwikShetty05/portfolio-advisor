@@ -629,11 +629,32 @@ def sidebar_controls() -> dict:
             help="Last day of price history. Defaults to today so the "
                  "analysis always includes the most recent trading day.",
         )
+        preset_name = st.selectbox(
+            "Universe preset", options=list(C.UNIVERSE_PRESETS.keys()), index=0,
+            help="Which basket of stocks the app loads and the "
+                 "Recommendations screen picks from. **Core (26)** is the fast "
+                 "default. **NIFTY 100** scans ~4× more of the market but the "
+                 "FIRST load is much slower (≈100 stocks fetched + regime-"
+                 "fitted) and may strain the free hosting tier — give it a "
+                 "minute, and use **🔄 Force refresh** if it stalls.",
+        )
+        preset_tickers = list(C.UNIVERSE_PRESETS[preset_name])
+        if preset_name.startswith("NIFTY 100"):
+            st.caption(
+                "⏳ NIFTY 100: heavier load. Recommendations then scan all "
+                "~100 names instead of 26 — broader, but slower."
+            )
         selected_universe = st.multiselect(
-            "Universe", options=C.UNIVERSE, default=C.UNIVERSE,
-            help="The basket of stocks the app analyses. Remove some for "
-                 "faster runs — anything you upload or search for is fetched "
-                 "on top of this list automatically.",
+            "Stocks in the universe", options=preset_tickers,
+            default=preset_tickers,
+            # Key depends on the preset so switching presets gives a FRESH
+            # widget — otherwise a stale selection from the other preset can
+            # contain tickers absent from the new options and Streamlit raises
+            # "default/selection not in options".
+            key=f"universe_ms_{preset_name}",
+            help="Fine-tune the preset — untick names to speed things up. "
+                 "Anything you upload or search for is fetched on top of this "
+                 "list automatically.",
         )
     if not selected_universe:
         st.sidebar.error("Select at least one ticker.")
@@ -3564,27 +3585,30 @@ def page_recommendations(pipe: dict) -> None:
                 if weak_note:
                     st.warning(weak_note)
 
+    n_uni = len(signaled)
+    _scope_note = (
+        f"ℹ️ Screens your **loaded universe of {n_uni} stock(s)** — **not** "
+        "the whole market. Switch **Core 26 → NIFTY 100** under ⚙️ Pipeline "
+        "settings (sidebar) to scan ~4× more. Same picks for everyone; your "
+        "uploaded portfolio only drives *Exit alerts*."
+    )
     with tab_short:
         st.caption(
-            "ℹ️ A **market-wide screen** of the whole universe (same for "
-            "everyone — your portfolio only drives the *Exit alerts* tab). "
-            "Momentum candidates meant to play out over **2–8 weeks**: the "
-            "stock must already be RISING over the past month, with the "
-            "score built from momentum, signal confidence, a healthy (not "
-            "overheated) RSI, volume confirmation and the market phase — "
-            "and it must clear a minimum overall score. Updates once per "
-            "trading day. An empty list means nothing clears the bar today "
-            "— that restraint is deliberate."
+            _scope_note + " Momentum candidates for **2–8 weeks**: the stock "
+            "must already be RISING over the past month, scored on momentum, "
+            "signal confidence, a healthy (not overheated) RSI, volume "
+            "confirmation and the market phase, and must clear a minimum "
+            "score. Updates once per trading day. An empty list means "
+            "nothing clears the bar — that restraint is deliberate."
         )
         _render_cards(st_df, "short-term", weak_note=short_term_weak_note)
         _render_track_record(eng, signaled)
     with tab_long:
         st.caption(
-            "ℹ️ A **market-wide screen** (independent of your portfolio). "
-            "Steadier compounders for a **3–18 month** hold: trading above "
-            "their own 200-day average (an established uptrend), low "
-            "volatility, and only suggested while the stock's own phase is "
-            "bullish. Updates once per trading day."
+            _scope_note + " Steadier compounders for a **3–18 month** hold: "
+            "trading above their 200-day average (an established uptrend), "
+            "low volatility, and only while the stock's own phase is bullish. "
+            "Updates once per trading day."
         )
         _render_cards(lt_df, "long-term")
     with tab_exit:
