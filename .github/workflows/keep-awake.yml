@@ -1,51 +1,85 @@
 name: Keep Streamlit app awake
 
-# Streamlit Community Cloud's free tier puts an app to sleep after a stretch
-# of no visitor traffic. This workflow sends the app a small request on a
-# schedule so it stays warm — visitors (and recruiters) never land on the
-# "this app has gone to sleep 💤" screen.
+# WHY A HEADLESS BROWSER (not a plain curl):
+# Streamlit Community Cloud's free tier counts "activity" as a real browser
+# SESSION — a client that loads the page and opens the WebSocket that runs
+# the app script. A bare HTTP GET (UptimeRobot, curl) never opens that
+# WebSocket, so it does NOT reset the inactivity timer and the app still
+# sleeps. Worse, the "gone to sleep" page itself returns HTTP 200, so a
+# plain pinger reports "UP" while the app is actually down.
 #
-# Notes / caveats:
-#   * GitHub delays scheduled jobs under load, so the real interval can be
-#     longer than requested — we ask for every ~15 min, which is ample.
-#   * GitHub auto-disables scheduled workflows after 60 days of NO repo
-#     activity; an occasional commit (or clicking "Enable workflow" in the
-#     Actions tab) keeps it alive.
-#   * This is the in-repo / no-account option. For the most reliable
-#     keep-warm AND downtime alerts, also point a free UptimeRobot HTTP
-#     monitor at the same URL (see SESSION_HANDOFF.md).
+# This job opens the app in a real headless Chromium, clicks the wake
+# button if the app is asleep, and holds the session open briefly so it
+# registers as genuine traffic — the only thing that actually keeps a free
+# Streamlit app warm.
+#
+# Caveats:
+#   * GitHub delays scheduled jobs under load; the real interval can be
+#     longer than requested. ~Every 15 min is plenty.
+#   * GitHub auto-disables scheduled workflows after 60 days with no repo
+#     commits — re-enable in the Actions tab if pings ever stop.
+#   * This is the most reliable FREE method, but not guaranteed forever.
+#     The only true always-on is paid hosting (see SESSION_HANDOFF.md).
 
 on:
   schedule:
-    # Offset from the top of the hour (:03, :18, :33, :48) to dodge the
-    # congestion at :00 where GitHub is most likely to drop/delay runs.
+    # Offset from :00 to dodge the top-of-hour scheduler congestion.
     - cron: "3,18,33,48 * * * *"
-  workflow_dispatch: {}   # lets you trigger a ping manually from the Actions tab
+  workflow_dispatch: {}   # manual trigger from the Actions tab
 
-# Don't pile up runs if one is slow; the latest ping is all that matters.
 concurrency:
   group: keep-awake
   cancel-in-progress: true
 
 jobs:
-  ping:
+  visit:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Ping the live app
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Visit the app like a real browser (wakes it if asleep)
         env:
           APP_URL: "https://ritwik-portfolio-advisor.streamlit.app/"
         run: |
-          # Follow redirects (-L) and send a browser-like UA so the request
-          # is treated as a real visit, not an opaque bot hit. Any 2xx/3xx
-          # means the app responded; we don't fail the job on transient
-          # blips (a single missed ping is harmless).
-          code=$(curl -sL -o /dev/null -w "%{http_code}" \
-                   --max-time 60 \
-                   -A "Mozilla/5.0 (keep-awake; github-actions)" \
-                   "$APP_URL" || echo "000")
-          echo "Pinged $APP_URL -> HTTP $code at $(date -u)"
-          case "$code" in
-            2*|3*) echo "App is awake. ✅" ;;
-            *)     echo "::warning::Unexpected status $code (transient? next ping will retry)" ;;
-          esac
+          python - <<'PY'
+          import os, re, time
+          from playwright.sync_api import sync_playwright
+
+          url = os.environ["APP_URL"]
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page()
+              page.goto(url, wait_until="domcontentloaded", timeout=60000)
+
+              # If asleep, Streamlit renders a "Yes, get this app back up!"
+              # button — clicking it triggers the real wake/boot.
+              try:
+                  wake = page.get_by_role("button", name=re.compile("back up", re.I))
+                  if wake.count() > 0:
+                      print("App was asleep — clicking the wake button.")
+                      wake.first.click()
+              except Exception as e:
+                  print("wake-button check skipped:", e)
+
+              # Wait for the actual Streamlit app shell to render — this is
+              # what confirms a live session was established (and gives a
+              # cold-booting app time to come up).
+              try:
+                  page.wait_for_selector('[data-testid="stApp"]', timeout=120000)
+                  print("App is awake and rendered. OK")
+              except Exception:
+                  print("stApp not visible yet — app may still be booting.")
+
+              # Hold the session open a moment so it counts as real traffic.
+              time.sleep(15)
+              browser.close()
+          PY
