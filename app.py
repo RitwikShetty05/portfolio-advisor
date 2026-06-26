@@ -3311,10 +3311,10 @@ def trade_pnl_chart(trade_log: pd.DataFrame) -> go.Figure:
 # ---------------------------------------------------------------------------
 # Page 5 — Recommendations
 # ---------------------------------------------------------------------------
-def _render_track_record(eng, signaled: dict) -> None:
-    """Honest, retrospective track record of the short-term rule — confidence
-    that's earned, not asserted. Cached on (tickers, latest date) so it isn't
-    recomputed on every tab switch."""
+def _get_track_record(eng, signaled: dict) -> dict:
+    """Compute (and cache, by tickers+latest-date) the short-term rule's
+    retrospective track record. Cached in session_state so the headline
+    panel AND the per-card calibration flag share ONE computation."""
     try:
         sig = (tuple(sorted(signaled.keys())),
                max((df.index[-1] for df in signaled.values() if not df.empty),
@@ -3325,8 +3325,31 @@ def _render_track_record(eng, signaled: dict) -> None:
         with st.spinner("Replaying the short-term rule over history…"):
             st.session_state["_tr_val"] = eng.historical_track_record(signaled)
         st.session_state["_tr_sig"] = sig
-    tr = st.session_state.get("_tr_val") or {}
+    return st.session_state.get("_tr_val") or {}
 
+
+def _weak_track_note(tr: dict) -> str | None:
+    """A one-line calibration warning when the short-term rule has NOT been
+    net-profitable historically (profit factor < 1). Returned so it can ride
+    along on every short-term card — the caution travels with each idea, not
+    just buried in the track-record panel. Returns None when the record is
+    healthy."""
+    pf = tr.get("profit_factor")
+    if not tr.get("n") or pf is None or pf >= 1.0:
+        return None
+    return (
+        f"⚠️ **Calibration:** this short-term screen has been roughly "
+        f"break-even over the last ~2 yrs on this universe (profit factor "
+        f"{pf:.2f}, {tr.get('win_rate', 0)*100:.0f}% win rate). Treat this as "
+        "a **watch idea** — keep size small and honour the stop. See the "
+        "Track-record panel below."
+    )
+
+
+def _render_track_record(eng, signaled: dict) -> None:
+    """Honest, retrospective track record of the short-term rule — confidence
+    that's earned, not asserted."""
+    tr = _get_track_record(eng, signaled)
     with st.expander("📊 Track record — how these signals have actually done",
                      expanded=False):
         if not tr.get("n"):
@@ -3471,13 +3494,20 @@ def page_recommendations(pipe: dict) -> None:
              "a rupee figure. Nothing is stored or sent anywhere.",
     )
 
+    # Compute the track record ONCE up front (cached) so its profit factor can
+    # both (a) drive the headline panel and (b) ride along as a calibration
+    # flag on every short-term card when the rule has been break-even.
+    tr_stats = _get_track_record(eng, signaled)
+    short_term_weak_note = _weak_track_note(tr_stats)
+
     tab_short, tab_long, tab_exit = st.tabs([
         "🟢 Short-Term (2–8 weeks)",
         "🔵 Long-Term (3–18 months)",
         "🟥 Exit alerts",
     ])
 
-    def _render_cards(df: pd.DataFrame, kind: str) -> None:
+    def _render_cards(df: pd.DataFrame, kind: str,
+                      weak_note: str | None = None) -> None:
         if df.empty:
             st.info(f"No {kind} candidates pass today's filter.")
             return
@@ -3528,6 +3558,11 @@ def page_recommendations(pipe: dict) -> None:
                     f"vol {float(row['Volatility_20'])*100:.0f}%  ·  "
                     f"{row['Regime_Label']}"
                 )
+                # Calibration flag — when the short-term rule has been
+                # break-even historically, say so on the card itself so the
+                # caution is impossible to miss.
+                if weak_note:
+                    st.warning(weak_note)
 
     with tab_short:
         st.caption(
@@ -3541,7 +3576,7 @@ def page_recommendations(pipe: dict) -> None:
             "trading day. An empty list means nothing clears the bar today "
             "— that restraint is deliberate."
         )
-        _render_cards(st_df, "short-term")
+        _render_cards(st_df, "short-term", weak_note=short_term_weak_note)
         _render_track_record(eng, signaled)
     with tab_long:
         st.caption(
