@@ -39,11 +39,22 @@ Long-term weights
     Signal confidence       15%
     Positive 20-day return  15%
 
+Conviction, sizing & track record (2026-06-26)
+----------------------------------------------
+Every pick carries an HONEST conviction tier (``_conviction`` — High/Medium/
+Low from composite score × breadth of engine agreement × confidence; a strong
+score from a single lens is capped at Medium) and a suggested position size
+(``_suggested_weight`` — conviction × regime, ≤10% cap, mirroring the
+backtester). ``market_summary`` powers a "what to do today" banner, and
+``historical_track_record`` replays the exact short-term rule over history so
+the engine's confidence is *earned* (shown hit-rate, incl. losers), not
+asserted.
+
 Filters
 -------
 Short-term : Signal ≥ 0, Confidence ≥ 0.30, Return_20d > 0, Regime ≥ SIDEWAYS,
-             composite Score ≥ 0.25 (absolute quality floor — being the only
-             stock to clear the gates does not by itself make a stock a pick).
+             composite Score ≥ 0.28, AND ≥2 of the 3 trend-following engines
+             agree (the 2026-06-26 tightening — one lens firing is noise).
 Long-term  : Close > MA200, Signal ≥ 0, Regime = BULL, Volatility_20 < 0.45.
              (No extra floor needed: the binary above-MA200 term already
              contributes 0.25, and the BULL + MA200 gates encode coherence.)
@@ -115,6 +126,59 @@ def _holding_period(vol: float, kind: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Conviction + position sizing — making the engine's confidence HONEST and
+# ACTIONABLE rather than just loud.
+# ---------------------------------------------------------------------------
+# Regime participation bonus (also reused inside the short-term score).
+REGIME_BONUS: dict[str, float] = {"BULL": 1.0, "SIDEWAYS": 0.5, "BEAR": 0.0}
+
+# Short-term screen thresholds (raised 2026-06-26 as part of the "tighten the
+# signal" upgrade — fewer, higher-quality ideas):
+#   * confidence floor unchanged at 0.30,
+#   * composite score floor 0.25 → 0.28,
+#   * NEW: at least ST_MIN_AGREEMENT of the three trend-following sub-engines
+#     (Trend / Momentum / Volume) must independently agree. A single lens
+#     firing is noise; two-plus aligning is signal.
+ST_CONF_FLOOR: float = 0.30
+ST_SCORE_FLOOR: float = 0.28
+ST_MIN_AGREEMENT: int = 2
+
+# Conviction → suggested fraction of investable capital, BEFORE the regime
+# haircut below. Anchored to the backtest's 10% per-stock cap so the live
+# guidance and the simulated strategy speak the same language.
+CONVICTION_SIZING: dict[str, float] = {"High": 0.10, "Medium": 0.06, "Low": 0.03}
+# Risk-off haircut: commit less of that target as the tape weakens — exactly
+# the size_mult the Backtester applies (1.0 / 0.7 / 0.5).
+REGIME_SIZE_MULT: dict[str, float] = {"BULL": 1.0, "SIDEWAYS": 0.7, "BEAR": 0.5}
+
+
+def _conviction(score: float, agreement: int, confidence: float) -> tuple[str, str]:
+    """Map (composite score, breadth of engine agreement, confidence) → an
+    HONEST conviction tier. Returns ``(label, stars)``.
+
+    The philosophy: conviction is high only when the idea is strong on the
+    composite score AND backed by *breadth* (multiple independent lenses
+    agree) AND the signal magnitude (confidence) is meaningful. A high score
+    from a single lens is deliberately capped at Medium — that's the
+    calibration that stops the tool from sounding certain when it isn't.
+    """
+    if score >= 0.45 and agreement >= 3 and confidence >= 0.38:
+        return "High", "★★★"
+    if score >= 0.32 and agreement >= 2:
+        return "Medium", "★★☆"
+    return "Low", "★☆☆"
+
+
+def _suggested_weight(conviction: str, regime_label: str) -> float:
+    """Suggested allocation as a FRACTION of investable capital, from
+    conviction × regime. Mirrors the backtester's sizing so the advice is
+    consistent with what was validated. Always ≤ the 10% per-stock cap."""
+    base = CONVICTION_SIZING.get(conviction, 0.03)
+    mult = REGIME_SIZE_MULT.get(regime_label, 0.7)
+    return round(min(base * mult, 0.10), 4)
+
+
+# ---------------------------------------------------------------------------
 # Recommendation engine
 # ---------------------------------------------------------------------------
 class RecommendationEngine:
@@ -176,51 +240,59 @@ class RecommendationEngine:
     # ------------------------------------------------------------------
     # Short-term scoring
     # ------------------------------------------------------------------
+    # ---- Shared short-term scoring (single source of truth) ----
+    # Both the live screen (_rank_short_term) and the historical track record
+    # call these, so what the cards show and what the track record measures
+    # are guaranteed to be the SAME rule — honesty by construction.
+    @staticmethod
+    def _short_term_score(df: pd.DataFrame) -> pd.Series:
+        """Composite 0..~1 short-term momentum score, vectorised over rows."""
+        mom = np.tanh(df["Return_20d"] / 0.20).clip(lower=0)             # 20-day momentum
+        conf = df["Confidence"].clip(lower=0, upper=1)                    # signal confidence
+        rsi_s = df["RSI_14"].apply(_rsi_score_short)                      # healthy-RSI band
+        vol_s = np.tanh((df["Vol_Ratio"].fillna(1.0) - 1.0)).clip(lower=0)  # volume confirm
+        reg_s = df["Regime_Label"].map(REGIME_BONUS).fillna(0.0)         # regime tailwind
+        return 0.30 * mom + 0.25 * conf + 0.20 * rsi_s + 0.15 * vol_s + 0.10 * reg_s
+
+    @staticmethod
+    def _engine_agreement(df: pd.DataFrame) -> pd.Series:
+        """How many of the three TREND-FOLLOWING sub-engines (Trend /
+        Momentum / Volume) independently lean bullish. Mean-reversion is
+        excluded on purpose — it's contrarian, so it *should* fight a strong
+        trend, and counting it would punish exactly the setups we want."""
+        cols = [c for c in ("Score_Trend", "Score_Momentum", "Score_Volume")
+                if c in df.columns]
+        if not cols:
+            return pd.Series(0, index=df.index)
+        return sum((df[c].fillna(0.0) > 0.05).astype(int) for c in cols)
+
+    @classmethod
+    def _short_term_eligible(cls, df: pd.DataFrame) -> pd.Series:
+        """Boolean mask: rows that pass the (tightened) short-term screen.
+
+        Gates: not a Sell, confidence ≥ floor, 20-day return strictly
+        positive (it's a momentum screen), regime ≥ SIDEWAYS, composite
+        score ≥ floor, AND ≥2 trend-following engines agree. The agreement
+        gate is the 2026-06-26 tightening — one lens firing is noise.
+        """
+        score = cls._short_term_score(df)
+        agree = cls._engine_agreement(df)
+        return (
+            (df["Signal"] >= 0)
+            & (df["Confidence"] >= ST_CONF_FLOOR)
+            & (df["Return_20d"] > 0.0)
+            & (df["Regime_Label"].isin(["SIDEWAYS", "BULL"]))
+            & (score >= ST_SCORE_FLOOR)
+            & (agree >= ST_MIN_AGREEMENT)
+        )
+
     def _rank_short_term(self, snap: pd.DataFrame) -> pd.DataFrame:
         if snap.empty:
             return snap
-
         df = snap.copy()
-        # Filter.
-        #
-        # Return_20d must be STRICTLY POSITIVE (was > −10%): this is a
-        # momentum screen, and a momentum candidate that has been falling
-        # for a month is a contradiction in terms. Real incident
-        # (2026-06-10): WIPRO — Hold signal, 20-day return −3.9%, RSI 30 —
-        # was the only name to squeak past the loose filter and therefore
-        # headlined the tab as "#1" with a momentum component of exactly
-        # 0.00. Last-man-standing is not a recommendation.
-        df = df[
-            (df["Signal"] >= 0) &
-            (df["Confidence"] >= 0.30) &
-            (df["Return_20d"] > 0.0) &
-            (df["Regime"].isin([C.REGIME_CODES["SIDEWAYS"], C.REGIME_CODES["BULL"]]))
-        ].copy()
-        if df.empty:
-            return df
-
-        # Component scores
-        # Momentum: ret_20d squashed via tanh — 20% over 20d → ~0.76 of max.
-        mom = np.tanh(df["Return_20d"] / 0.20).clip(lower=0)
-        conf = df["Confidence"].clip(lower=0, upper=1)
-        rsi_s = df["RSI_14"].apply(_rsi_score_short)
-        # Volume: tanh of (Vol_Ratio - 1).
-        vol_s = np.tanh((df["Vol_Ratio"].fillna(1.0) - 1.0)).clip(lower=0)
-        reg_s = df["Regime_Label"].map(self.REGIME_BONUS).fillna(0.0)
-
-        df["Score"] = (
-            0.30 * mom + 0.25 * conf + 0.20 * rsi_s + 0.15 * vol_s + 0.10 * reg_s
-        )
-        # ABSOLUTE quality floor — ranking alone isn't enough. The filter
-        # above is a pass/fail gate per condition, but a stock can clear
-        # every gate minimally and still be a poor idea (regime bonus 0.10
-        # + threshold confidence 0.075 ≈ 0.18 with zero momentum/RSI/volume
-        # contribution). Requiring Score ≥ 0.25 means at least one engine
-        # beyond "the market is bullish" actually likes the stock; genuine
-        # momentum candidates (e.g. +10% over 20d at conf 0.30 in BULL)
-        # score ≈ 0.31 and pass comfortably. An empty list is the honest
-        # output when nothing qualifies — the UI says exactly that.
-        df = df[df["Score"] >= 0.25]
+        df["Score"] = self._short_term_score(df)
+        df["Engine_Agreement"] = self._engine_agreement(df)
+        df = df[self._short_term_eligible(df)].copy()
         if df.empty:
             return df
         df["Type"] = "Short-Term"
@@ -228,7 +300,32 @@ class RecommendationEngine:
             lambda v: _holding_period(v, "short_term")
         )
         df["Rationale"] = df.apply(self._rationale_short, axis=1)
-        return self._format_output(df).sort_values("Score", ascending=False)
+        df = self._add_conviction_sizing(df)
+        # High-conviction ideas lead, then by score within a tier.
+        return (self._format_output(df)
+                .sort_values(["_conv_rank", "Score"], ascending=[False, False]))
+
+    # ---- Conviction + position-size annotation (shared short & long) ----
+    @staticmethod
+    def _add_conviction_sizing(df: pd.DataFrame) -> pd.DataFrame:
+        """Attach Conviction (label + stars), a numeric _conv_rank for
+        sorting, and a Suggested_Weight (fraction of capital)."""
+        df = df.copy()
+        agree = df["Engine_Agreement"] if "Engine_Agreement" in df.columns \
+            else RecommendationEngine._engine_agreement(df)
+        convs = [
+            _conviction(float(s), int(a), float(c))
+            for s, a, c in zip(df["Score"], agree, df["Confidence"])
+        ]
+        df["Conviction"] = [c[0] for c in convs]
+        df["Conviction_Stars"] = [c[1] for c in convs]
+        df["_conv_rank"] = df["Conviction"].map(
+            {"High": 3, "Medium": 2, "Low": 1}).fillna(1).astype(int)
+        df["Suggested_Weight"] = [
+            _suggested_weight(cv, str(rg))
+            for cv, rg in zip(df["Conviction"], df["Regime_Label"])
+        ]
+        return df
 
     @staticmethod
     def _rationale_short(row) -> str:
@@ -283,11 +380,14 @@ class RecommendationEngine:
             + 0.15 * conf + 0.15 * mom_pos
         )
         df["Type"] = "Long-Term"
+        df["Engine_Agreement"] = self._engine_agreement(df)
         df["Holding_Period"] = df["Volatility_20"].apply(
             lambda v: _holding_period(v, "long_term")
         )
         df["Rationale"] = df.apply(self._rationale_long, axis=1)
-        return self._format_output(df).sort_values("Score", ascending=False)
+        df = self._add_conviction_sizing(df)
+        return (self._format_output(df)
+                .sort_values(["_conv_rank", "Score"], ascending=[False, False]))
 
     @staticmethod
     def _rationale_long(row) -> str:
@@ -327,7 +427,9 @@ class RecommendationEngine:
             df["Risk_Reward"] = ((df["Target_2"] - close).abs() / risk).fillna(0.0)
 
         cols = [
-            "ticker", "Type", "Score", "Signal_Strength", "Confidence",
+            "ticker", "Type", "Score", "Conviction", "Conviction_Stars",
+            "_conv_rank", "Engine_Agreement", "Suggested_Weight",
+            "Signal_Strength", "Confidence",
             "Close", "Entry_Low", "Entry_High",
             "Stop_Loss", "Target_1", "Target_2", "Risk_Reward",
             "Holding_Period", "RSI_14", "Volatility_20", "Regime_Label",
@@ -416,6 +518,128 @@ class RecommendationEngine:
         return out
 
     # ------------------------------------------------------------------
+    # Market summary — drives the "what to do today" action-plan banner
+    # ------------------------------------------------------------------
+    @staticmethod
+    def market_summary(signaled: dict[str, pd.DataFrame]) -> dict:
+        """Latest-bar regime breakdown across the universe. Cheap; lets the
+        UI tell the user the market backdrop in one honest line."""
+        counts = {"BULL": 0, "SIDEWAYS": 0, "BEAR": 0}
+        n = 0
+        for df in signaled.values():
+            last = df.dropna(subset=["Regime_Label"]).tail(1)
+            if last.empty:
+                continue
+            lbl = str(last["Regime_Label"].iloc[0])
+            if lbl in counts:
+                counts[lbl] += 1
+            n += 1
+        defensive = counts["BEAR"] + counts["SIDEWAYS"]
+        if n == 0:
+            phase = "Unknown"
+        elif counts["BULL"] >= 0.5 * n:
+            phase = "Constructive"
+        elif counts["BEAR"] >= 0.4 * n:
+            phase = "Defensive"
+        else:
+            phase = "Mixed / range-bound"
+        return {"counts": counts, "n_scored": n,
+                "defensive": defensive, "phase": phase}
+
+    # ------------------------------------------------------------------
+    # Retrospective track record — confidence that is EARNED, not asserted
+    # ------------------------------------------------------------------
+    def historical_track_record(
+        self,
+        signaled: dict[str, pd.DataFrame],
+        lookback_days: int = 504,
+        max_hold: int = 40,
+        atr_stop: float = 2.0,
+        atr_target: float = 4.0,
+    ) -> dict:
+        """Replay the SHORT-TERM entry rule over recent history and simulate
+        each idea's outcome with the exact stop/target the cards show.
+
+        This is deliberately a *retrospective* computation, not a live
+        journal: a public, stateless Streamlit Cloud app resets its disk on
+        every redeploy, so a "log what it told me" file would be wiped and
+        misleading. Replaying the rule over history needs no storage, is
+        perfectly reproducible, and — crucially — shows the LOSSES too.
+
+        Honest framing for the UI: this is the hit-rate of individual
+        signals (entry → first of stop / target / opposite-signal / time
+        limit), net of round-trip cost. It is NOT a portfolio return (no
+        capital or position-count constraint) — so report it as signal
+        quality, not "what you'd have made".
+
+        Returns a stats dict (``{"n": 0}`` when nothing triggered).
+        """
+        need = ["Close", "High", "Low", "ATR_14", "Return_20d",
+                "Confidence", "RSI_14", "Regime_Label", "Signal"]
+        trades: list[dict] = []
+        for ticker, raw in signaled.items():
+            d = raw.dropna(subset=[c for c in need if c in raw.columns])
+            if len(d) < 60 or not all(c in d.columns for c in need):
+                continue
+            d = d.tail(lookback_days + max_hold)
+            elig = self._short_term_eligible(d).to_numpy()
+            close = d["Close"].to_numpy(dtype=float)
+            high = d["High"].to_numpy(dtype=float)
+            low = d["Low"].to_numpy(dtype=float)
+            atr = d["ATR_14"].fillna(0.0).to_numpy(dtype=float)
+            sig = d["Signal"].to_numpy(dtype=float)
+            n = len(d)
+            i = 0
+            while i < n - 1:
+                if not elig[i] or atr[i] <= 0:
+                    i += 1
+                    continue
+                entry = close[i]
+                stop = entry - atr_stop * atr[i]
+                target = entry + atr_target * atr[i]
+                ret = None
+                j = i
+                for j in range(i + 1, min(i + 1 + max_hold, n)):
+                    if low[j] <= stop:
+                        ret, reason = stop / entry - 1.0, "stop"
+                        break
+                    if high[j] >= target:
+                        ret, reason = target / entry - 1.0, "target"
+                        break
+                    if sig[j] == -1:
+                        ret, reason = close[j] / entry - 1.0, "signal"
+                        break
+                if ret is None:                      # ran out of room → time exit
+                    j = min(i + max_hold, n - 1)
+                    ret, reason = close[j] / entry - 1.0, "time"
+                ret -= 2.0 * C.TRANSACTION_COST       # round-trip friction
+                trades.append({"ticker": ticker, "ret": float(ret),
+                               "hold": int(j - i), "reason": reason})
+                i = j + 1                             # no overlapping entries per name
+
+        if not trades:
+            return {"n": 0}
+        tr = pd.DataFrame(trades)
+        wins = tr.loc[tr["ret"] > 0, "ret"]
+        losses = tr.loc[tr["ret"] <= 0, "ret"]
+        pf = (float(wins.sum() / abs(losses.sum()))
+              if len(losses) and losses.sum() < 0
+              else (float("inf") if len(wins) else 0.0))
+        return {
+            "n": int(len(tr)),
+            "win_rate": float(len(wins) / len(tr)),
+            "avg_return": float(tr["ret"].mean()),
+            "avg_win": float(wins.mean()) if len(wins) else 0.0,
+            "avg_loss": float(losses.mean()) if len(losses) else 0.0,
+            "profit_factor": pf,
+            "avg_hold_days": float(tr["hold"].mean()),
+            "best": float(tr["ret"].max()),
+            "worst": float(tr["ret"].min()),
+            "exit_reasons": tr["reason"].value_counts().to_dict(),
+            "lookback_days": int(lookback_days),
+        }
+
+    # ------------------------------------------------------------------
     # Pretty print
     # ------------------------------------------------------------------
     @staticmethod
@@ -487,3 +711,38 @@ if __name__ == "__main__":
     eng = RecommendationEngine()
     result = eng.generate(signaled, current_holdings={"TCS.NS": 30_000, "RELIANCE.NS": 20_000})
     eng.print_report(result)
+
+    # ---- Exercise the 2026-06-26 upgrade: conviction, sizing, summary, track record ----
+    print("\n" + "=" * 80)
+    print("  UPGRADE SELF-CHECKS (conviction / sizing / summary / track record)")
+    print("=" * 80)
+
+    summ = eng.market_summary(signaled)
+    print(f"Market summary: phase={summ['phase']}  counts={summ['counts']}  "
+          f"scored={summ['n_scored']}")
+
+    for kind in ("short_term", "long_term"):
+        df = result[kind]
+        if df.empty:
+            print(f"[{kind}] empty today (honest no-pick).")
+            continue
+        assert {"Conviction", "Conviction_Stars", "Suggested_Weight"} <= set(df.columns), \
+            f"{kind} missing conviction/sizing columns"
+        assert df["Conviction"].isin(["High", "Medium", "Low"]).all()
+        assert (df["Suggested_Weight"] <= 0.10 + 1e-9).all(), "weight exceeds 10% cap"
+        # Sorted High→Low conviction.
+        ranks = df["_conv_rank"].tolist() if "_conv_rank" in df.columns else []
+        assert ranks == sorted(ranks, reverse=True), f"{kind} not conviction-sorted"
+        print(f"[{kind}] {len(df)} pick(s); convictions="
+              f"{df['Conviction'].value_counts().to_dict()}; "
+              f"weights={[f'{w*100:.0f}%' for w in df['Suggested_Weight']]}")
+
+    tr = eng.historical_track_record(signaled)
+    if tr.get("n", 0):
+        print(f"Track record: n={tr['n']}  win_rate={tr['win_rate']*100:.0f}%  "
+              f"avg_return={tr['avg_return']*100:+.2f}%  PF={tr['profit_factor']:.2f}  "
+              f"avg_hold={tr['avg_hold_days']:.0f}d  exits={tr['exit_reasons']}")
+        assert 0.0 <= tr["win_rate"] <= 1.0
+    else:
+        print("Track record: no historical short-term entries on synthetic data.")
+    print("✓ upgrade self-checks passed")

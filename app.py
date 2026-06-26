@@ -3311,6 +3311,71 @@ def trade_pnl_chart(trade_log: pd.DataFrame) -> go.Figure:
 # ---------------------------------------------------------------------------
 # Page 5 — Recommendations
 # ---------------------------------------------------------------------------
+def _render_track_record(eng, signaled: dict) -> None:
+    """Honest, retrospective track record of the short-term rule — confidence
+    that's earned, not asserted. Cached on (tickers, latest date) so it isn't
+    recomputed on every tab switch."""
+    try:
+        sig = (tuple(sorted(signaled.keys())),
+               max((df.index[-1] for df in signaled.values() if not df.empty),
+                   default=None))
+    except Exception:
+        sig = None
+    if st.session_state.get("_tr_sig") != sig:
+        with st.spinner("Replaying the short-term rule over history…"):
+            st.session_state["_tr_val"] = eng.historical_track_record(signaled)
+        st.session_state["_tr_sig"] = sig
+    tr = st.session_state.get("_tr_val") or {}
+
+    with st.expander("📊 Track record — how these signals have actually done",
+                     expanded=False):
+        if not tr.get("n"):
+            st.info("Not enough history to build a track record yet.")
+            return
+        yrs = max(1, tr["lookback_days"] // 252)
+        st.caption(
+            "**Earned, not asserted.** We replay the *exact* short-term entry "
+            f"rule above over the last ~{yrs} year(s) and simulate every idea "
+            "to the same stop/target the cards show, net of round-trip cost. "
+            "This is the hit-rate of **individual signals — not** a portfolio "
+            "return — and it deliberately counts the losers too."
+        )
+        c1, c2, c3, c4 = st.columns(4)
+        metric_card(c1, "Signals tested", f"{tr['n']}",
+                    help_text="How many times the short-term rule would have "
+                              "fired across the universe in the window.")
+        metric_card(c2, "Win rate", f"{tr['win_rate']*100:.0f}%",
+                    help_text="Share that hit their target (or closed up) "
+                              "before the stop. Trend systems run LOW win "
+                              "rates on purpose — read it with profit factor.")
+        metric_card(c3, "Avg / signal", format_pct(tr['avg_return']),
+                    help_text="Average outcome per signal, net of costs — the "
+                              "honest expectancy of one idea.")
+        metric_card(c4, "Profit factor", f"{tr['profit_factor']:.2f}",
+                    help_text="Gross wins ÷ gross losses. Above 1 means the "
+                              "winners more than pay for the losers; >1.5 is "
+                              "healthy.")
+        c1, c2, c3, c4 = st.columns(4)
+        metric_card(c1, "Avg win", format_pct(tr['avg_win']))
+        metric_card(c2, "Avg loss", format_pct(tr['avg_loss']))
+        metric_card(c3, "Best / worst",
+                    f"{format_pct(tr['best'])} / {format_pct(tr['worst'])}")
+        metric_card(c4, "Avg hold", f"{tr['avg_hold_days']:.0f} d")
+        er = tr.get("exit_reasons", {})
+        if er:
+            st.caption(
+                "Exits: " + " · ".join(f"**{k}** {v}" for k, v in er.items())
+                + ". The signature of trend-following — many small stops paid "
+                "for by fewer, larger targets — so a sub-50% win rate with "
+                "profit factor > 1 is exactly what 'working' looks like."
+            )
+        st.caption(
+            "⚠️ Past signal behaviour is not a promise of future results, and "
+            "this isn't investment advice — it's a calibration tool so you "
+            "know how much to trust a green card."
+        )
+
+
 def page_recommendations(pipe: dict) -> None:
     st.title("Recommendations")
     signaled = pipe["signaled"]
@@ -3340,6 +3405,72 @@ def page_recommendations(pipe: dict) -> None:
     with st.spinner("Ranking opportunities…"):
         result = eng.generate(signaled, current_holdings=holdings or None)
 
+    st_df, lt_df, ex_df = (result["short_term"], result["long_term"],
+                           result["exits"])
+
+    # ---------------- "What to do today" action plan ----------------
+    # A decisive top-of-page summary: the market backdrop, how many ideas
+    # cleared the bar and at what conviction, and a one-line verdict. This
+    # is the "confident but honest" face of the page — loud when the signals
+    # align, plainly patient when they don't.
+    summ = eng.market_summary(signaled)
+    cnt = summ["counts"]
+
+    def _conv_count(df: pd.DataFrame, label: str) -> int:
+        return (int((df["Conviction"] == label).sum())
+                if not df.empty and "Conviction" in df.columns else 0)
+
+    n_high = _conv_count(st_df, "High") + _conv_count(lt_df, "High")
+    n_buys = (0 if st_df.empty else len(st_df)) + (0 if lt_df.empty else len(lt_df))
+    n_exits = 0 if ex_df.empty else len(ex_df)
+
+    with st.container(border=True):
+        st.markdown("#### 📋 What to do today")
+        a = st.columns(3)
+        metric_card(a[0], "Market backdrop", summ["phase"],
+                    delta=f"🟢{cnt['BULL']} ⚪{cnt['SIDEWAYS']} 🔴{cnt['BEAR']}",
+                    help_text="Phase read from the latest-bar regime mix "
+                              "across the universe. The system buys freely in "
+                              "a constructive tape and turns cautious in a "
+                              "defensive one.")
+        metric_card(a[1], "Buy ideas today", f"{n_buys}",
+                    delta=(f"{n_high} high-conviction" if n_high
+                           else ("all medium/low" if n_buys else "none")),
+                    help_text="Total names clearing the Short- + Long-Term "
+                              "screens. Quality over quantity — fewer, "
+                              "stronger ideas is the goal.")
+        metric_card(a[2], "Exit alerts", f"{n_exits}" if holdings else "—",
+                    help_text="Holdings of YOURS flagged to trim/exit. Upload "
+                              "your portfolio above to enable this.")
+        # One-line verdict — decisive, and honest when there's nothing to do.
+        if n_buys == 0:
+            verdict = ("🛡️ **No buy ideas clear the bar today — patience is "
+                       "the position.** In a weak or choppy tape the screen "
+                       "stays empty by design; that discipline is the edge.")
+        elif n_high:
+            verdict = (f"✅ **{n_high} high-conviction idea(s)** — this is where "
+                       "the independent signals align most strongly. Size per "
+                       "the suggested allocation and **always set the stop.**")
+        else:
+            verdict = (f"🟡 **{n_buys} idea(s), medium/low conviction** — "
+                       "reasonable setups, but nothing the model is loud "
+                       "about. Smaller size, tighter discipline.")
+        if holdings and n_exits:
+            verdict += (f"  ⚠️ **{n_exits} of your holdings** triggered an exit "
+                        "alert — check the Exit tab.")
+        elif not holdings:
+            verdict += ("  ℹ️ Upload your holdings (above) to get exit alerts "
+                        "on what you own.")
+        st.markdown(verdict)
+
+    # Investable capital → turns the suggested % allocations into ₹ amounts.
+    capital = st.number_input(
+        "Your investable capital (₹) — for position sizing",
+        min_value=1_000, value=100_000, step=10_000,
+        help="Used only to translate each idea's suggested % allocation into "
+             "a rupee figure. Nothing is stored or sent anywhere.",
+    )
+
     tab_short, tab_long, tab_exit = st.tabs([
         "🟢 Short-Term (2–8 weeks)",
         "🔵 Long-Term (3–18 months)",
@@ -3350,15 +3481,20 @@ def page_recommendations(pipe: dict) -> None:
         if df.empty:
             st.info(f"No {kind} candidates pass today's filter.")
             return
-        for i, row in df.iterrows():
+        for n, (_, row) in enumerate(df.iterrows(), start=1):
             rr = float(row.get("Risk_Reward", 0))
             conf = float(row["Confidence"]) * 100
+            stars = str(row.get("Conviction_Stars", ""))
+            conv = str(row.get("Conviction", "—"))
+            weight = float(row.get("Suggested_Weight", 0.0))
             with st.container(border=True):
-                # Compact one-line header — ticker + verdict folded together
-                # (was a tall 3-metric row) so each card takes less height.
+                # Header now leads with the CONVICTION badge — the first thing
+                # the eye should land on when deciding how seriously to take
+                # the idea.
                 st.markdown(
-                    f"**#{i+1} · {row['ticker']}**  ·  {row['Signal_Strength']}  "
-                    f"·  {conf:.0f}% confidence  ·  hold {row['Holding_Period']}"
+                    f"**#{n} · {row['ticker']}**  ·  {stars} **{conv}** "
+                    f"conviction  ·  {row['Signal_Strength']}  ·  "
+                    f"{conf:.0f}% confidence  ·  hold {row['Holding_Period']}"
                 )
                 lvl = st.columns(5)
                 metric_card(lvl[0], "Entry zone",
@@ -3378,6 +3514,15 @@ def page_recommendations(pipe: dict) -> None:
                             help_text="Runner target at 4× ATR (1:2 R/R).")
                 metric_card(lvl[4], "R/R", f"{rr:.1f}",
                             help_text="Reward to T2 ÷ risk to stop.")
+                # Position-size guidance — conviction × regime, in ₹.
+                alloc = weight * float(capital)
+                st.caption(
+                    f"💰 **Suggested size: ~{weight*100:.0f}% of capital** "
+                    f"(≈ {format_inr(alloc)} of {format_inr(float(capital))}) — "
+                    f"scaled by {conv} conviction × {row['Regime_Label']} "
+                    f"regime, capped at 10% per stock. Never risk more than "
+                    f"you can lose."
+                )
                 st.caption(
                     f"🧠 {row['Rationale']}  ·  RSI {float(row['RSI_14']):.0f}  ·  "
                     f"vol {float(row['Volatility_20'])*100:.0f}%  ·  "
@@ -3396,7 +3541,8 @@ def page_recommendations(pipe: dict) -> None:
             "trading day. An empty list means nothing clears the bar today "
             "— that restraint is deliberate."
         )
-        _render_cards(result["short_term"], "short-term")
+        _render_cards(st_df, "short-term")
+        _render_track_record(eng, signaled)
     with tab_long:
         st.caption(
             "ℹ️ A **market-wide screen** (independent of your portfolio). "
@@ -3405,7 +3551,7 @@ def page_recommendations(pipe: dict) -> None:
             "volatility, and only suggested while the stock's own phase is "
             "bullish. Updates once per trading day."
         )
-        _render_cards(result["long_term"], "long-term")
+        _render_cards(lt_df, "long-term")
     with tab_exit:
         st.caption(
             "ℹ️ Watches **your uploaded holdings** for reasons to lighten "
